@@ -47,6 +47,12 @@ pub struct Config {
     /// DuckDB 内存上限（MB）；`None` 表示用 DuckDB 默认（物理内存的 80%）。
     /// 1GB 内存的机器务必设 256 左右，否则大范围聚合查询可能把进程撑爆。
     pub db_memory_limit_mb: Option<u64>,
+    /// DuckDB 异步 I/O 线程数上限（2.0 新增的 `async_threads`）；`None` 表示用默认（64）。
+    /// 2.0 把 I/O 从查询线程里拆出来单独开池，小规格云主机同样需要跟着收紧。
+    pub db_async_threads: Option<u32>,
+    /// 单条 SQL 的最长执行时间（毫秒，2.0 新增的 `max_execution_time`）；`None` 表示不限。
+    /// 所有查询都串行排在唯一的写线程上，一条失控的聚合会挡住后面所有写入。
+    pub db_query_timeout_ms: Option<u64>,
 }
 
 fn env_str(key: &str, default: &str) -> String {
@@ -113,6 +119,8 @@ impl Config {
             seed_demo: env_bool("UPS_SEED_DEMO", false),
             db_threads: env_opt("UPS_DB_THREADS"),
             db_memory_limit_mb: env_opt("UPS_DB_MEMORY_LIMIT_MB"),
+            db_async_threads: env_opt("UPS_DB_ASYNC_THREADS"),
+            db_query_timeout_ms: env_opt("UPS_DB_QUERY_TIMEOUT_MS"),
         }
     }
 }

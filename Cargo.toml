@@ -14,7 +14,7 @@ askama = "0.14"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 nom = "8"
-duckdb = { version = "1.4", default-features = false }
+duckdb = { git = "https://github.com/duckdb/duckdb-rs", rev = "a2f4978e211b6a7ab7efa9a4b29ab7efd0b588dc", default-features = false }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 tracing = "0.1"

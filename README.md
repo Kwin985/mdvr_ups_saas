@@ -2,7 +2,7 @@
 
 基于 4G 透传的车载 UPS 远程监控与 OTA 管理平台。MDVR 只做透明管道，协议解析、设备寻址、升级状态机全部收敛在服务端。
 
-技术栈：Rust 2024 / Tokio / Axum 0.8 / Askama / HTMX / DuckDB / Casbin / JWT。
+技术栈：Rust 2024 / Tokio / Axum 0.8 / Askama / HTMX / DuckDB 2.0 / Casbin / JWT。
 
 ## 能力
 
@@ -17,18 +17,22 @@
 
 ### 1. 准备 DuckDB 动态库
 
-`duckdb` crate 需要与版本匹配的原生库（本仓库锁定 DuckDB 1.5.6）。二选一：
+`duckdb` crate 需要与版本匹配的原生库（本仓库锁定 **DuckDB 2.0.0 LTS**）。二选一：
 
 ```bash
 # 方式 A：让构建脚本自动下载预编译库（需要能访问 GitHub）
 export DUCKDB_DOWNLOAD_LIB=1
 
 # 方式 B：使用本地预编译库
-# 下载 https://github.com/duckdb/duckdb/releases/download/v1.5.6/libduckdb-windows-amd64.zip
-# 解压后指定目录（包含 duckdb.lib / duckdb.h / duckdb.dll）
+# 下载 https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-shared-libs-windows-amd64.tar.gz
+# 解压后指定目录（包含 duckdb.lib / duckdb.h / duckdb.dll / duckdb_v2.h）
 export DUCKDB_LIB_DIR=/path/to/libduckdb
 export DUCKDB_INCLUDE_DIR=/path/to/libduckdb
 ```
+
+> 注意 2.0 的预编译包改名了：1.5.x 是 `libduckdb-windows-amd64.zip`，2.0 起是
+> `duckdb-shared-libs-windows-amd64.tar.gz`，且额外带 `duckdb_v2.h`（新 C API）。
+> 旧包仍可用，但缺少 `duckdb_v2.h` 时新 API 相关代码无法编译。
 
 运行时 `duckdb.dll` 必须在可执行文件同目录或 `PATH` 中：
 
@@ -92,6 +96,8 @@ cargo run --release --bin simulator
 | `UPS_ADMIN_USER` / `UPS_ADMIN_PASSWORD` | `admin` / `admin123` | 首次启动创建的管理员 |
 | `UPS_DB_THREADS` | 不设 = DuckDB 默认（核数） | DuckDB 线程上限，小规格云主机设 `1` |
 | `UPS_DB_MEMORY_LIMIT_MB` | 不设 = DuckDB 默认（内存 80%） | DuckDB 内存上限，1GB 机器建议 `256` |
+| `UPS_DB_ASYNC_THREADS` | 不设 = DuckDB 默认（`64`） | DuckDB 2.0 异步 I/O 线程池上限，小机器建议跟 `UPS_DB_THREADS` 同值 |
+| `UPS_DB_QUERY_TIMEOUT_MS` | 不设 = 不限 | 单条 SQL 执行上限（毫秒）；所有查询串行排在唯一写线程上，设了可防一条慢查询堵住写入 |
 
 环境变量只在**首次启动**播种进 `settings` 表，之后以页面为准。
 
@@ -147,6 +153,62 @@ mdvr_ups purge --yes
 响应默认启用 gzip / brotli 压缩（设备树 194 KB → 4 KB）。按流量计费的部署（如 GCP e2-micro
 每月 1 GB 出站）必须配合 `UPS_DB_THREADS=1`、`UPS_DB_MEMORY_LIMIT_MB=256`，
 详细容量测算与 systemd / 防火墙 / 构建清单见 [docs/deploy-e2-micro.md](docs/deploy-e2-micro.md)。
+
+## DuckDB 2.0
+
+2026-10-21 发布的 2.0.0（LTS，代号 Cinnamon Teal，社区支持到 2027-10）是本项目当前锁定的版本。
+
+### 绑定状态（重要）
+
+2.0 发布时 Rust 官方绑定**尚未发版**：crates.io 上 `duckdb` 最新仍是 `1.10506.1`（对应 1.5.6）。
+因此 `Cargo.toml` 用 git 依赖锁到 `duckdb-rs` 的 `release-version-main-v2.0` 分支上的一个具体
+commit（`rev` 固定，可复现），该分支内部 pin 的是 `2.0.0-alpha49504` 构建。
+
+等 `duckdb` crate 发布 `1.20000.x` 后，把依赖换回版本号即可，代码无需改动：
+
+```toml
+duckdb = { version = "1.20000", default-features = false }
+```
+
+> 首次构建需要能访问 `github.com` 来拉取该 commit；拉到之后会缓存进 `~/.cargo/git`。
+> 如果网络受限，可先把 `duckdb-rs` 该 commit 的源码放到本地，改用 `path` 依赖临时构建。
+> 提交里没有包含 `Cargo.lock` 的对应条目——第一次 `cargo build` 会自动补上。
+
+### 存储格式：单向门
+
+| 场景 | 结果 |
+|---|---|
+| 2.0 打开 1.x 建的库 | ✅ 可读可写，**且改完 1.5.6 仍能打开**（实测 1031 行生产数据双向验证） |
+| 1.5.x 打开 2.0 建的库 | ❌ 拒绝：`Trying to read a database file with version number 69, but we can only read versions between 64 and 68` |
+
+也就是说**原地升级可回滚**，但只要 2.0 新建过一个库（或把现有库重建），就回不去了。
+升级前照例备份 `data/`；需要保留回滚能力时，别删旧库、别重建。
+
+### 实测对比（200k / 1M 行，本机）
+
+| 指标 | 1.5.6 | 2.0.0 | 变化 |
+|---|---|---|---|
+| Appender 灌 100 万行 | 409 ms | 406 ms | 持平 |
+| 集合式 `INSERT ... SELECT` | 99 ms | 69 ms | **快 1.43×** |
+| `latest_all`（QUALIFY 窗口） | 6.24 ms | 4.37 ms | **快 1.43×** |
+| 单 SN 时间范围聚合 | 1.58 ms | 1.91 ms | 慢 1.2× |
+| 磁盘占用 | 4364 KB | 4364 KB | 相同 |
+
+`latest_all` 是设备树每次轮询都会跑的查询，写入路径也是真实使用的 Appender + 暂存表方式，
+这两条热路径各快约 1.4 倍。注意：**逐行 prepared statement 插入在 2.0 上反而慢约 1.9 倍**，
+本项目不使用该方式；如果你要加新的写入代码，请继续用 Appender 批量灌入。
+
+### 2.0 新增的资源旋钮
+
+2.0 把 I/O 从查询线程里拆出来，默认开 64 个异步线程，且新增了查询超时。两者默认值都不适合
+1GB / 0.25 vCPU 的小机器，因此接成了环境变量（见上文配置表）：
+
+- `UPS_DB_ASYNC_THREADS` → `PRAGMA async_threads`
+- `UPS_DB_QUERY_TIMEOUT_MS` → `PRAGMA max_execution_time`
+
+两项都**默认不设**（保持 DuckDB 默认行为）。注意异步 I/O 主要服务于远程存储，
+`storage_block_prefetch` 默认 `REMOTE_ONLY`；本项目是本地盘，收益有限，收紧线程数主要是
+为了省资源而不是提速。
 
 ## 目录结构
 

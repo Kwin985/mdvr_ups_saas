@@ -366,6 +366,8 @@ impl Store {
         let limits = DbLimits {
             threads: cfg.db_threads,
             memory_limit_mb: cfg.db_memory_limit_mb,
+            async_threads: cfg.db_async_threads,
+            query_timeout_ms: cfg.db_query_timeout_ms,
         };
         let stats = Arc::new(StoreStats::default());
         let writer_stats = stats.clone();
@@ -657,6 +659,10 @@ fn migrate_columns(conn: &Connection) -> Result<()> {
 pub struct DbLimits {
     pub threads: Option<u32>,
     pub memory_limit_mb: Option<u64>,
+    /// 2.0 新增：异步 I/O 线程池大小（默认 64）。
+    pub async_threads: Option<u32>,
+    /// 2.0 新增：单条 SQL 执行上限（毫秒，0/None = 不限）。
+    pub query_timeout_ms: Option<u64>,
 }
 
 fn run_writer(
@@ -686,6 +692,22 @@ fn run_writer(
         match conn.execute_batch(&format!("PRAGMA memory_limit='{mb}MB';")) {
             Ok(()) => tracing::info!(limit_mb = mb, "DuckDB 内存上限已限制"),
             Err(e) => tracing::warn!(error = %e, "设置 DuckDB 内存上限失败"),
+        }
+    }
+    // DuckDB 2.0 把 I/O 从查询线程里拆出来、默认开 64 个异步线程。这是随 2.0 新增的
+    // 又一个池子，和 threads 一样在 1GB / 0.25 vCPU 的机器上需要跟着收紧。
+    if let Some(t) = limits.async_threads {
+        match conn.execute_batch(&format!("PRAGMA async_threads={t};")) {
+            Ok(()) => tracing::info!(async_threads = t, "DuckDB 异步 I/O 线程数已限制"),
+            Err(e) => tracing::warn!(error = %e, "设置 DuckDB 异步线程数失败（需 2.0+）"),
+        }
+    }
+    // 所有查询都串行排在唯一的写线程上，一条失控的聚合会把后续写入全部堵住。
+    // 2.0 的 max_execution_time 能在引擎内部直接打断超时查询，比事后限流更有效。
+    if let Some(ms) = limits.query_timeout_ms {
+        match conn.execute_batch(&format!("PRAGMA max_execution_time={ms};")) {
+            Ok(()) => tracing::info!(timeout_ms = ms, "DuckDB 查询超时已设置"),
+            Err(e) => tracing::warn!(error = %e, "设置 DuckDB 查询超时失败（需 2.0+）"),
         }
     }
     if let Err(e) = init_schema(&conn) {
@@ -2398,5 +2420,54 @@ mod tests {
         assert_eq!(parent_of(&st, "ring_a"), "admin");
         assert_eq!(parent_of(&st, "ring_b"), "admin");
         assert!(!parent_of(&st, "tail").is_empty());
+    }
+
+    /// DuckDB 2.0 新增的两个资源限制项必须被接受并真正生效。
+    /// 它们在 `run_writer` 里通过 `PRAGMA` 设置，拼错了只会在运行时打一行 warn，
+    /// 小规格云主机上就会悄悄退回默认值（async_threads=64）。
+    #[test]
+    fn duckdb_2_0_resource_pragmas_take_effect() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA async_threads=2;").unwrap();
+        conn.execute_batch("PRAGMA max_execution_time=5000;").unwrap();
+
+        // 注意：current_setting 会保留设置项自身的类型，这两项都是 BIGINT，按字符串取会报
+        // InvalidColumnType，所以这里必须读 i64。
+        let async_threads: i64 = conn
+            .query_row("SELECT current_setting('async_threads')", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(async_threads, 2);
+
+        let timeout: i64 = conn
+            .query_row("SELECT current_setting('max_execution_time')", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(timeout, 5000);
+    }
+
+    /// 2.0 必须能打开 1.x 建的库（向后兼容），否则升级就不可回滚了。
+    #[test]
+    fn opens_existing_database_file() {
+        let dir = std::env::temp_dir().join(format!("ups_compat_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.duckdb");
+        let _ = std::fs::remove_file(&path);
+
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE t(x INTEGER); INSERT INTO t VALUES (1),(2);")
+                .unwrap();
+        }
+        {
+            // 重开（模拟服务重启）应能读到之前写入的数据
+            let conn = Connection::open(&path).unwrap();
+            let n: i64 = conn
+                .query_row("SELECT count(*) FROM t", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 2);
+        }
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
