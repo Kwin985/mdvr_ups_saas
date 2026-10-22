@@ -1,0 +1,37 @@
+[package]
+name = "mdvr_ups"
+version = "0.1.0"
+edition = "2024"
+description = "UPS remote monitoring and OTA management over MDVR 4G pass-through"
+default-run = "mdvr_ups"
+
+[dependencies]
+axum = { version = "0.8", features = ["multipart"] }
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "trace", "compression-gzip", "compression-br"] }
+askama = "0.14"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+nom = "8"
+duckdb = { version = "1.4", default-features = false }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+jsonwebtoken = "9"
+argon2 = "0.5"
+casbin = "2.20"
+rand = "0.8"
+anyhow = "1"
+thiserror = "2"
+bytes = "1"
+sha2 = "0.10"
+hex = "0.4"
+dashmap = "6"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
+
+[profile.release]
+opt-level = 2

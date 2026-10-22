@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="{{ t.html_lang() }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>{{ t.site_title() }} · {{ t.tr("login.title") }}</title>
+  <link rel="stylesheet" href="/static/app.css?v=3">
+</head>
+<body class="login-body">
+  <div class="login-bg" aria-hidden="true">
+    <span class="bg-grid"></span>
+    <span class="bg-glow a"></span>
+    <span class="bg-glow b"></span>
+    <svg class="bg-ring" viewBox="0 0 600 600">
+      <defs>
+        <linearGradient id="ringFade" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#4fc3f7" stop-opacity=".7"/>
+          <stop offset="1" stop-color="#1976d2" stop-opacity=".05"/>
+        </linearGradient>
+      </defs>
+      <circle class="ring-dash" cx="300" cy="300" r="286"/>
+      <circle class="ring-arc" cx="300" cy="300" r="238" stroke="url(#ringFade)"/>
+      <circle class="ring-soft" cx="300" cy="300" r="196"/>
+    </svg>
+    <span class="bg-scan"></span>
+  </div>
+
+  <div class="login-shell">
+    <span class="hud tl" aria-hidden="true"></span>
+    <span class="hud tr" aria-hidden="true"></span>
+    <span class="hud bl" aria-hidden="true"></span>
+    <span class="hud br" aria-hidden="true"></span>
+    <section class="login-brand">
+      <div class="brand-row">
+        <span class="brand-mark">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+            <path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12l1-8.5Z" stroke-linejoin="round"/>
+          </svg>
+        </span>
+        <span class="brand-text">
+          <strong>{{ t.site_title() }}</strong>
+          <em>UPS · 4G · OTA</em>
+        </span>
+      </div>
+
+      <h1 class="brand-title">{{ t.tr("login.hero_a") }}<span>{{ t.tr("login.hero_b") }}</span></h1>
+      <p class="brand-lead">{{ t.tr("login.lead") }}</p>
+
+      <ul class="feature-list">
+        <li>
+          <i class="f-ico"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h3.5l2-5.5 3 11 2.2-5.5H21"/></svg></i>
+          <span>{{ t.tr("login.feature1") }}</span>
+        </li>
+        <li>
+          <i class="f-ico"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 19V10M9 19V5M14 19v-6M19 19V8"/></svg></i>
+          <span>{{ t.tr("login.feature2") }}</span>
+        </li>
+        <li>
+          <i class="f-ico"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M8 8l4-4 4 4M4 19h16"/></svg></i>
+          <span>{{ t.tr("login.feature3") }}</span>
+        </li>
+        <li>
+          <i class="f-ico"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5.5c0 4.2-2.9 7.4-7 8.5-4.1-1.1-7-4.3-7-8.5V6l7-3Z"/></svg></i>
+          <span>{{ t.tr("login.feature4") }}</span>
+        </li>
+      </ul>
+
+      <svg class="brand-pulse" viewBox="0 0 400 40" preserveAspectRatio="none" aria-hidden="true">
+        <path class="pulse-base" d="M0 22h36l6-13 7 26 6-21 4 8h28l6-15 7 30 6-22 4 7h34l7-12 8 24 6-18 4 6h30l6-16 8 32 6-24 4 8h32l7-11 8 22 6-17 4 5h36l6-14 7 28 6-20 4 6h61"/>
+        <path class="pulse-live" d="M0 22h36l6-13 7 26 6-21 4 8h28l6-15 7 30 6-22 4 7h34l7-12 8 24 6-18 4 6h30l6-16 8 32 6-24 4 8h32l7-11 8 22 6-17 4 5h36l6-14 7 28 6-20 4 6h61"/>
+      </svg>
+
+      <div class="spec-strip">
+        <span class="spec-tag">{{ t.tr("login.spec_tag") }}</span>
+        <span class="spec"><b>MX-UPS-05</b></span>
+        <span class="spec">DC 8–36V</span>
+        <span class="spec">3.35Ah · 49.6Wh</span>
+        <span class="spec">14.8V</span>
+      </div>
+    </section>
+
+    <section class="login-panel">
+      <div class="login-card">
+        <span class="card-eyebrow"><i class="dot"></i>{{ t.tr("login.eyebrow") }}</span>
+        <h2>{{ t.tr("login.heading") }}</h2>
+        <p class="muted">{{ t.tr("login.sub") }}</p>
+        {% if !error.is_empty() %}
+        <div class="alert err">{{ error }}</div>
+        {% endif %}
+        <form method="post" action="/login" class="login-form">
+          <label>{{ t.tr("login.username") }}
+            <input name="username" autocomplete="username" required autofocus>
+          </label>
+          <label>{{ t.tr("login.password") }}
+            <input name="password" type="password" autocomplete="current-password" required>
+          </label>
+          <input type="hidden" name="next" value="{{ next }}">
+          <button class="btn primary full login-submit" type="submit">
+            <span>{{ t.tr("login.submit") }}</span>
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6"/></svg>
+          </button>
+        </form>
+      </div>
+      <p class="login-foot">{{ t.tr("login.foot") }}</p>
+    </section>
+  </div>
+</body>
+</html>

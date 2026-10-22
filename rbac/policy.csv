@@ -1,0 +1,34 @@
+﻿# 角色继承：admin > {firmware_manager, operator} > viewer
+# 刻意让 firmware_manager 与 operator 平级：升级权限与设备控制权限互不包含，
+# 避免「能升级固件」顺带获得「能重启设备 / 改参数」的能力。
+g, admin, firmware_manager
+g, admin, operator
+g, firmware_manager, viewer
+g, operator, viewer
+
+# viewer：只读
+p, viewer, /, GET
+p, viewer, /analysis, GET
+p, viewer, /analysis/export, GET
+p, viewer, /monitor, GET
+p, viewer, /api/tree, GET
+p, viewer, /devices/*/panel, GET
+p, viewer, /devices/*/live, GET
+p, viewer, /devices, GET
+p, viewer, /devices/*, GET
+p, viewer, /devices/*/history, GET
+p, viewer, /ota, GET
+p, viewer, /api/ota/jobs/*, GET
+p, viewer, /logout, POST
+
+# operator：可下发重启 / 配置
+p, operator, /devices/*/command, POST
+
+# firmware_manager：可上传固件并发起 OTA
+p, firmware_manager, /ota/upload, POST
+p, firmware_manager, /ota/start, POST
+p, firmware_manager, /ota/*/start, POST
+
+# admin：用户管理与全部权限
+p, admin, /admin/*, (GET|POST|PUT|DELETE)
+p, admin, /*, (GET|POST|PUT|DELETE)

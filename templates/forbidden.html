@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}{{ t.tr("forbidden.title") }} · {{ t.site_title() }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ t.tr("forbidden.heading") }}</h1>
+    <p class="subtitle">{{ t.tr("forbidden.subtitle") }}</p>
+  </div>
+</div>
+<div class="empty-state">
+  <h3>403 · {{ t.tr("forbidden.heading") }}</h3>
+  <p>{{ body }}</p>
+  <p class="muted">{{ t.tr("forbidden.hint") }}</p>
+  <a class="btn primary" href="/dashboard">{{ t.tr("forbidden.back") }}</a>
+</div>
+{% endblock %}

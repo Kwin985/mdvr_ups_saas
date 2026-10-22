@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}{{ t.tr("users.title") }} · {{ t.site_title() }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ t.tr("users.heading") }}</h1>
+    <p class="subtitle">{{ subtitle }}</p>
+  </div>
+</div>
+
+{% if !flash.is_empty() %}<div class="flash">{{ flash }}</div>{% endif %}
+{% if !error.is_empty() %}<div class="alert err">{{ error }}</div>{% endif %}
+
+<div class="two-col">
+  <div class="panel">
+    <div class="panel-head"><h3>{{ t.tr("users.create") }}</h3></div>
+    <form class="stack-form" method="post" action="/admin/users">
+      <label>{{ t.tr("users.username") }}<input name="username" minlength="3" required placeholder="{{ t.tr("users.username_ph") }}"></label>
+      <label>{{ t.tr("users.password") }}<input name="password" type="password" minlength="6" required placeholder="{{ t.tr("users.password_ph") }}"></label>
+      <label>{{ t.tr("users.role") }}
+        <select name="role">
+          <option value="viewer">{{ t.tr("users.role_viewer") }}</option>
+          <option value="operator">{{ t.tr("users.role_operator") }}</option>
+          <option value="firmware_manager">{{ t.tr("users.role_fw") }}</option>
+          <option value="admin">{{ t.tr("users.role_admin") }}</option>
+        </select>
+      </label>
+      <label>{{ t.tr("users.parent") }}
+        <select name="parent">
+          {% for p in parent_options %}
+          <option value="{{ p }}" {% if p.as_str() == root.as_str() %}selected{% endif %}>{{ p }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button class="btn primary" type="submit">{{ t.tr("users.create_submit") }}</button>
+    </form>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h3>{{ t.tr("users.rbac") }}</h3></div>
+    <dl class="kv">
+      <dt>viewer</dt><dd>{{ t.tr("users.rbac_viewer") }}</dd>
+      <dt>operator</dt><dd>{{ t.tr("users.rbac_operator") }}</dd>
+      <dt>firmware_manager</dt><dd>{{ t.tr("users.rbac_fw") }}</dd>
+      <dt>admin</dt><dd>{{ t.tr("users.rbac_admin") }}</dd>
+      <dt>{{ t.tr("users.scope") }}</dt><dd>{{ scope_admin }}</dd>
+      <dt>{{ t.tr("users.hierarchy") }}</dt><dd>{{ hierarchy_body }}</dd>
+      <dt>{{ t.tr("users.unassigned") }}</dt><dd>{{ unassigned_body }}</dd>
+    </dl>
+    <p class="hint" style="margin-top:10px">{{ t.tr("users.auth_note") }}</p>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head"><h3>{{ t.tr("users.platform") }}</h3><span class="muted">{{ users.len() }} {{ t.tr("users.account_count") }}</span></div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>{{ t.tr("users.col_username") }}</th><th>{{ t.tr("users.col_role") }}</th><th>{{ t.tr("users.col_parent") }}</th><th>{{ t.tr("users.col_devices") }}</th><th>{{ t.tr("users.col_created") }}</th><th class="right">{{ t.tr("users.col_actions") }}</th></tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td>
+            <span class="depth-{{ u.depth }}"></span>
+            {% if u.depth > 0 %}<span class="tree-hint">└ </span>{% endif %}
+            <strong>{{ u.username }}</strong>
+            {% if u.is_self %}<span class="badge ok">{{ t.tr("common.current") }}</span>{% endif %}
+          </td>
+          <td><span class="role-badge">{{ u.role }}</span></td>
+          <td>{% if u.username.as_str() == root.as_str() %}<span class="muted">{{ t.tr("common.root") }}</span>{% else %}<span class="mono">{{ u.parent }}</span>{% endif %}</td>
+          <td>{{ u.visible_devices }}{% if u.children > 0 %}<span class="muted"> · {{ u.children }} {{ t.tr("users.children_count") }}</span>{% endif %}</td>
+          <td class="mono">{{ u.created }}</td>
+          <td class="right">
+            <div class="row-actions">
+              {% if u.username.as_str() == root.as_str() %}
+              <span class="muted small">{{ t.tr("users.root_admin") }}</span>
+              {% else if u.is_self %}
+              <span class="muted small">{{ t.tr("users.self_account") }}</span>
+              {% else %}
+              <form method="post" action="/admin/users/parent" class="inline-form">
+                <input type="hidden" name="username" value="{{ u.username }}">
+                <select name="parent" class="select-sm">
+                  {% for p in u.parent_choices %}
+                  <option value="{{ p.name }}" {% if p.selected %}selected{% endif %}>{{ p.name }}</option>
+                  {% endfor %}
+                </select>
+                <button class="btn ghost small" type="submit">{{ t.tr("common.save") }}</button>
+              </form>
+              {% if u.children > 0 %}
+              <button class="btn ghost small" type="button" disabled title="{{ t.tr("users.has_children") }}">{{ t.tr("common.delete") }}</button>
+              {% else if u.devices > 0 %}
+              <button class="btn ghost small" type="button" disabled title="{{ t.tr("users.has_devices") }}">{{ t.tr("common.delete") }}</button>
+              {% else %}
+              <form method="post" action="/admin/users/delete" onsubmit="return confirm(window.I18N ? window.I18N.confirm_delete : '{{ t.tr("users.confirm_delete") }}')">
+                <input type="hidden" name="username" value="{{ u.username }}">
+                <button class="btn danger small" type="submit">{{ t.tr("common.delete") }}</button>
+              </form>
+              {% endif %}
+              {% endif %}
+              {# 重置口令每一行都给：自己的口令必须能改（否则没有第二个管理员时就换不了口令），
+                 根管理员与普通账号的口令也要能由 admin 代改。
+                 改自己的上级、删自己服务端本就禁止，故这两处不渲染表单。 #}
+              <form method="post" action="/admin/users/password" class="inline-form"
+                    onsubmit="return confirm(window.I18N ? window.I18N.confirm_reset : '{{ t.tr("users.confirm_reset") }}')">
+                <input type="hidden" name="username" value="{{ u.username }}">
+                <input type="password" name="password" class="input-sm" minlength="6" required
+                       placeholder="{{ t.tr("users.new_password_ph") }}" autocomplete="new-password">
+                <button class="btn ghost small" type="submit">{{ t.tr("users.reset_pwd") }}</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+        {% if users.len() == 0 %}
+        <tr><td colspan="6" class="muted center">{{ t.tr("users.none") }}</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

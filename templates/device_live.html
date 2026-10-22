@@ -1,0 +1,38 @@
+<div id="liveMetrics"
+     hx-get="/devices/{{ sn }}/live"
+     hx-trigger="every 3s"
+     hx-swap="outerHTML">
+  <div class="detail-head">
+    <div class="detail-badges">
+      {% if online %}<span class="badge ok">{{ t.tr("live.online") }}</span>{% else %}<span class="badge off">{{ t.tr("live.offline") }}</span>{% endif %}
+      {% if busy %}<span class="badge run">{{ t.tr("live.busy") }}</span>{% endif %}
+      <span class="badge {{ health_class }}">{{ health }}</span>
+    </div>
+    <div class="detail-actions">
+      <span class="muted mono">{{ t.tr("live.last_report") }} {{ last_seen }}</span>
+    </div>
+  </div>
+
+  <div class="metric-grid">
+    <div class="metric-card">
+      <span class="metric-label">{{ t.tr("live.battery") }}</span>
+      <span class="metric-value">{{ battery }}<small>%</small></span>
+      <div class="bar thin"><span style="width: {{ battery }}%"></span></div>
+    </div>
+    <div class="metric-card">
+      <span class="metric-label">{{ t.tr("live.input_v") }}</span>
+      <span class="metric-value">{{ input_voltage }}<small>V</small></span>
+      <span class="metric-foot">{{ t.tr("live.ups_v") }} {{ output_voltage }} V</span>
+    </div>
+    <div class="metric-card">
+      <span class="metric-label">{{ t.tr("live.temp") }}</span>
+      <span class="metric-value">{{ temperature }}<small>℃</small></span>
+      <span class="metric-foot">FW {{ firmware }}</span>
+    </div>
+    <div class="metric-card">
+      <span class="metric-label">{{ t.tr("live.link") }}</span>
+      <span class="metric-value small-value">{{ uptime }}</span>
+      <span class="metric-foot mono">{{ remote }}</span>
+    </div>
+  </div>
+</div>

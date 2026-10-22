@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}{{ t.tr("settings.title") }} · {{ t.site_title() }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ t.tr("settings.heading") }}</h1>
+    <p class="subtitle">{{ t.tr("settings.subtitle") }}</p>
+  </div>
+</div>
+
+{% if !flash.is_empty() %}<div class="flash">{{ flash }}</div>{% endif %}
+{% if !error.is_empty() %}<div class="alert err">{{ t.tr("settings.invalid") }}{{ error }}</div>{% endif %}
+
+<form method="post" action="/admin/settings" class="settings-form">
+  {% for g in groups %}
+  {% if g.settings.len() > 0 %}
+  <div class="panel">
+    <div class="panel-head"><h3>{{ g.name }}</h3></div>
+    <dl class="kv settings-kv">
+      {% for s in g.settings %}
+      <dt>
+        {{ s.label }}
+        {% if s.restart %}<span class="badge warn restart-badge" title="{{ t.tr("settings.restart_hint") }}">{{ t.tr("settings.restart_badge") }}</span>{% endif %}
+      </dt>
+      <dd>
+        {{ s.control|safe }}
+        <p class="hint">{{ s.hint }}</p>
+      </dd>
+      {% endfor %}
+    </dl>
+  </div>
+  {% endif %}
+  {% endfor %}
+
+  <div class="panel">
+    <p class="hint">{{ t.tr("settings.restart_hint") }}</p>
+    <div class="form-actions">
+      <button class="btn primary" type="submit">{{ t.tr("settings.submit") }}</button>
+      <button class="btn warn" type="button" onclick="restartSystem(this)"
+              data-confirm="{{ t.tr("settings.restart_confirm") }}"
+              data-restarting="{{ t.tr("settings.restarting") }}">{{ t.tr("settings.restart") }}</button>
+    </div>
+  </div>
+</form>
+
+<script>
+function restartSystem(btn) {
+  if (!confirm(btn.dataset.confirm)) return;
+  btn.disabled = true;
+  fetch("/admin/restart", { method: "POST", credentials: "same-origin" })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d && d.ok) {
+        alert(d.message || btn.dataset.restarting);
+        setTimeout(function () { location.reload(); }, 4000);
+      } else {
+        alert((d && d.message) || "restart failed");
+        btn.disabled = false;
+      }
+    })
+    .catch(function (e) {
+      alert("restart failed: " + e);
+      btn.disabled = false;
+    });
+}
+</script>
+{% endblock %}

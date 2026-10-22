@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}{{ t.tr("analysis.title") }} · {{ t.site_title() }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ t.tr("analysis.heading") }}</h1>
+    <p class="subtitle">{{ t.tr("analysis.subtitle") }}</p>
+  </div>
+</div>
+
+{% if devices.len() == 0 %}
+<div class="empty-state">
+  <h3>{{ t.tr("analysis.no_devices") }}</h3>
+  <p>{{ t.tr("analysis.no_devices_body") }}</p>
+</div>
+{% else %}
+
+<form method="get" action="/analysis" class="query-bar">
+  <label class="q-field">
+    <span>{{ t.tr("analysis.device") }}</span>
+    <select name="sn">
+      {% for d in devices %}
+      <option value="{{ d.sn }}" {% if d.sn == sn %}selected{% endif %}>{{ d.sn }}{% if d.online %} ●{% endif %}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="q-field">
+    <span>{{ t.tr("analysis.from") }}</span>
+    <input type="date" name="from" value="{{ from }}">
+  </label>
+  <span class="q-sep">{{ t.tr("analysis.to_sep") }}</span>
+  <label class="q-field">
+    <span>{{ t.tr("analysis.to") }}</span>
+    <input type="date" name="to" value="{{ to }}">
+  </label>
+  <button class="btn ghost" type="submit" name="days" value="7" onclick="this.form.from.value='';this.form.to.value=''">{{ t.tr("analysis.last7") }}</button>
+  <button class="btn ghost" type="submit" name="days" value="30" onclick="this.form.from.value='';this.form.to.value=''">{{ t.tr("analysis.last30") }}</button>
+  <button class="btn primary" type="submit">{{ t.tr("analysis.query") }}</button>
+  <button class="btn ghost" type="button" onclick="exportAnalysis(this)" data-exporting="{{ t.tr("analysis.exporting") }}">{{ t.tr("analysis.export") }}</button>
+  <span id="exportStatus" class="export-status"></span>
+</form>
+
+<div class="panel">
+  <div class="panel-head">
+    <h3>{{ t.tr("analysis.stats") }}</h3>
+    <span class="muted">{{ range_label }}</span>
+  </div>
+  {% if count == 0 %}
+  <p class="muted">{{ t.tr("analysis.no_data") }}</p>
+  {% else %}
+  <div class="stat-grid analysis-stats">
+    <div class="stat-card">
+      <span class="stat-label">{{ t.tr("analysis.count") }}</span>
+      <span class="stat-value">{{ count }}</span>
+      <span class="stat-foot">{{ t.tr("analysis.count_foot") }}</span>
+    </div>
+    {% for g in stats %}
+    <div class="stat-card {{ g.color }}">
+      <span class="stat-label">{{ g.label }}</span>
+      <div class="minmax-row">
+        <div><i>{{ t.tr("analysis.min") }}</i><strong>{{ g.min }}</strong></div>
+        <div><i>{{ t.tr("analysis.avg") }}</i><strong>{{ g.avg }}</strong></div>
+        <div><i>{{ t.tr("analysis.max") }}</i><strong>{{ g.max }}</strong></div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <div class="panel-head"><h3>{{ t.tr("analysis.battery_chart") }}</h3></div>
+  {{ battery_chart|safe }}
+  {% if events.len() > 0 %}
+  <div class="events-list">
+    <span class="events-title">{{ t.tr("analysis.events") }}</span>
+    {% for ev in events %}
+    <span class="event-tag {{ ev.kind }}"><i class="dot"></i>{{ ev.time }} · {{ ev.label }}</span>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <div class="panel-head"><h3>{{ t.tr("analysis.voltage_chart") }}</h3></div>
+  {{ voltage_chart|safe }}
+</div>
+
+<div class="panel">
+  <div class="panel-head"><h3>{{ t.tr("analysis.temp_chart") }}</h3></div>
+  {{ temp_chart|safe }}
+</div>
+
+{% endif %}
+
+<script>
+function exportAnalysis(btn) {
+  var f = document.querySelector('form.query-bar');
+  var qs = new URLSearchParams(location.search);
+  var params = new URLSearchParams();
+  params.set('sn', qs.get('sn') || (f.sn ? f.sn.value : ''));
+  params.set('from', qs.get('from') || '');
+  params.set('to', qs.get('to') || '');
+  params.set('days', qs.get('days') || '7');
+  var status = document.getElementById('exportStatus');
+  status.textContent = btn.dataset.exporting || 'Exporting…';
+  status.className = 'export-status';
+  btn.disabled = true;
+  fetch('/analysis/export?' + params.toString(), { method: 'GET', credentials: 'same-origin' })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d && d.ok) {
+        status.textContent = d.message;
+        status.className = 'export-status ok';
+      } else {
+        status.textContent = (d && d.message) || 'Export failed';
+        status.className = 'export-status err';
+      }
+      btn.disabled = false;
+    })
+    .catch(function (e) {
+      status.textContent = 'Export failed: ' + e;
+      status.className = 'export-status err';
+      btn.disabled = false;
+    });
+}
+</script>
+{% endblock %}

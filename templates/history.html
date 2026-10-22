@@ -1,0 +1,60 @@
+<div class="history-fragment">
+  <div class="chart-wrap">
+    {{ chart|safe }}
+  </div>
+
+  <div class="stat-grid compact">
+    <div class="stat-card">
+      <span class="stat-label">{{ t.tr("history.avg_battery") }}</span>
+      <span class="stat-value">{{ avg_battery }}</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">{{ t.tr("history.battery_range") }}</span>
+      <span class="stat-value">{{ min_battery }}–{{ max_battery }}<span class="stat-unit">%</span></span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">{{ t.tr("history.avg_temp") }}</span>
+      <span class="stat-value">{{ avg_temp }}</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">{{ t.tr("history.temp_range") }}</span>
+      <span class="stat-value">{{ temp_range }}</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">{{ t.tr("history.avg_input") }}</span>
+      <span class="stat-value">{{ avg_input }}</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">{{ t.tr("history.avg_output") }}</span>
+      <span class="stat-value">{{ avg_output }}</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">{{ t.tr("history.samples") }}</span>
+      <span class="stat-value">{{ count }}</span>
+    </div>
+  </div>
+
+  <div class="table-wrap scroll">
+    <table>
+      <thead>
+        <tr><th>{{ t.tr("history.col_time") }}</th><th>{{ t.tr("history.col_input") }}</th><th>{{ t.tr("history.col_output") }}</th><th>{{ t.tr("history.col_temp") }}</th><th>{{ t.tr("history.col_battery") }}</th><th>{{ t.tr("history.col_health") }}</th></tr>
+      </thead>
+      <tbody>
+        {% for s in samples %}
+        <tr>
+          <td class="mono">{{ s.time }}</td>
+          <td>{{ s.input }} V</td>
+          <td>{{ s.output }} V</td>
+          <td>{{ s.temperature }} ℃</td>
+          <td>{{ s.battery }}%</td>
+          <td>{{ s.health }}</td>
+        </tr>
+        {% endfor %}
+        {% if samples.len() == 0 %}
+        <tr><td colspan="6" class="muted center">{{ t.tr("history.no_data") }}</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+  <p class="hint">{{ foot }}</p>
+</div>

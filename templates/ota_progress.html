@@ -1,0 +1,15 @@
+<div class="job-card" {% if !job.finished %}hx-get="/ota/jobs/{{ job.id }}/progress" hx-trigger="every 900ms" hx-swap="outerHTML"{% endif %}>
+  <div class="job-head">
+    <div class="job-title">
+      <span class="mono">{{ job.sn }}</span>
+      {% if !job.firmware_version.is_empty() %}<span class="muted">v{{ job.firmware_version }}</span>{% endif %}
+    </div>
+    <span class="badge {{ job.state_class }}">{{ job.state_label }}</span>
+  </div>
+  <div class="bar thin"><span style="width: {{ job.percent }}%"></span></div>
+  <div class="job-meta">
+    <span>{{ job.sent }} / {{ job.total }} {{ t.tr("prog.packets") }} · {{ job.percent }}%</span>
+    <span class="mono">{{ job.started }}</span>
+  </div>
+  <div class="job-msg">{{ job.message }}</div>
+</div>

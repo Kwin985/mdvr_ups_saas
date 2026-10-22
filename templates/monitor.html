@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}{{ t.tr("monitor.title") }} · {{ t.site_title() }}{% endblock %}
+{% block head %}<script src="/static/monitor.js" defer></script>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ t.tr("monitor.heading") }}</h1>
+    <p class="subtitle">{{ t.tr("monitor.subtitle") }}</p>
+  </div>
+  <div class="spacer"></div>
+  <span class="live"><span class="pulse"></span><span id="treeStamp">{{ t.tr("monitor.syncing") }}</span></span>
+</div>
+
+<div class="monitor-layout">
+  <aside class="tree-pane">
+    <div class="tree-search">
+      <input id="treeSearch" type="text" placeholder="{{ t.tr("monitor.search_ph") }}" autocomplete="off">
+    </div>
+    <div class="tree-filter" id="treeFilter">
+      <div class="filter-btn active" data-filter="all">{{ t.tr("monitor.filter_all") }}</div>
+      <div class="filter-btn" data-filter="online">{{ t.tr("monitor.filter_online") }}</div>
+      <div class="filter-btn" data-filter="offline">{{ t.tr("monitor.filter_offline") }}</div>
+    </div>
+    <div class="tree-body" id="deviceTree">
+      <div class="empty-hint">{{ t.tr("monitor.loading_tree") }}</div>
+    </div>
+  </aside>
+
+  <section class="detail-pane" id="detailPane">
+    <div class="empty-state">
+      <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.3">
+        <rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 20h8M12 17v3" stroke-linecap="round"/>
+      </svg>
+      <span>{{ t.tr("monitor.pick_hint") }}</span>
+    </div>
+  </section>
+</div>
+
+<script id="initialTree" type="application/json">{{ tree_json|safe }}</script>
+<script>
+  (function () {
+    // 首屏直接用服务端统计，避免等 /api/tree 返回时顶部数字闪成 “—”
+    var s = { total: {{ stats.total }}, online: {{ stats.online }}, abnormal: {{ stats.abnormal }}, users: {{ stats.users }} };
+    var map = { statDevices: s.total, statOnline: s.online, statAbnormal: s.abnormal, statUsers: s.users };
+    Object.keys(map).forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.textContent = map[id];
+    });
+  })();
+  window.__INITIAL_SN__ = "{{ initial }}";
+  window.__CAN_ASSIGN__ = {% if can_assign %}true{% else %}false{% endif %};
+</script>
+{% endblock %}

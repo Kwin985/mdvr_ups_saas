@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}{{ t.tr("ota.title") }} · {{ t.site_title() }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ t.tr("ota.heading") }}</h1>
+    <p class="subtitle">{{ t.tr("ota.subtitle") }}</p>
+  </div>
+</div>
+{% if !flash.is_empty() %}<div class="flash">{{ flash }}</div>{% endif %}
+{% if !error.is_empty() %}<div class="alert err">{{ error }}</div>{% endif %}
+
+<div class="panel">
+  <div class="panel-head"><h3>{{ t.tr("ota.quick") }}</h3><span class="muted">{{ t.tr("ota.quick_tip") }}</span></div>
+  {% if can_manage %}
+  <form class="stack-form" method="post" action="/ota/upload" enctype="multipart/form-data">
+    <label>{{ t.tr("ota.target") }}
+      <select name="sn" required>
+        {% for d in devices %}
+        <option value="{{ d.sn }}" {% if d.sn == selected_sn %}selected{% endif %}>{{ d.sn }} · {{ d.mdvr_id }}{% if d.online %}（{{ t.tr("ota.online_tag") }}）{% else %}（{{ t.tr("ota.offline_tag") }}）{% endif %}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>{{ t.tr("ota.fw_version") }}
+      <input name="version" placeholder="{{ t.tr("ota.fw_ph") }}" required>
+    </label>
+    <label>{{ t.tr("ota.fw_file") }}
+      <input type="file" name="file" accept=".bin,.hex,.fw" required>
+    </label>
+    <button class="btn primary" type="submit">{{ t.tr("ota.quick_submit") }}</button>
+  </form>
+  <p class="hint">{{ t.tr("ota.quick_hint") }}</p>
+  {% else %}
+  <p class="muted">{{ t.tr("ota.no_perm_upload") }}</p>
+  {% endif %}
+</div>
+
+<div class="two-col">
+  <div class="panel">
+    <div class="panel-head"><h3>{{ t.tr("ota.upload") }}</h3><span class="muted">{{ t.tr("ota.max_size") }}</span></div>
+    {% if can_manage %}
+    <form class="stack-form" method="post" action="/ota/upload" enctype="multipart/form-data">
+      <label>{{ t.tr("ota.fw_version") }}
+        <input name="version" placeholder="{{ t.tr("ota.fw_ph") }}" required>
+      </label>
+      <label>{{ t.tr("ota.fw_file") }}
+        <input type="file" name="file" accept=".bin,.hex,.fw" required>
+      </label>
+      <button class="btn primary" type="submit">{{ t.tr("ota.upload_submit") }}</button>
+    </form>
+    <p class="hint">{{ t.tr("ota.upload_hint") }}</p>
+    {% else %}
+    <p class="muted">{{ t.tr("ota.no_perm_upload") }}</p>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h3>{{ t.tr("ota.start") }}</h3><span class="muted">{{ t.tr("ota.isolate_note") }}</span></div>
+    {% if can_manage %}
+    <form class="stack-form" method="post" action="/ota/start">
+      <label>{{ t.tr("ota.target") }}
+        <select name="sn" required>
+          {% for d in devices %}
+          <option value="{{ d.sn }}">{{ d.sn }} · {{ d.mdvr_id }}{% if d.online %}（{{ t.tr("ota.online_tag") }}）{% else %}（{{ t.tr("ota.offline_tag") }}）{% endif %}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>{{ t.tr("ota.fw_version") }}
+        <select name="firmware_id" required>
+          {% for f in firmware %}
+          <option value="{{ f.id }}">v{{ f.version }} · {{ f.filename }}（{{ f.size }}）</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button class="btn primary" type="submit">{{ t.tr("ota.start_submit") }}</button>
+    </form>
+    {% if devices.len() == 0 || firmware.len() == 0 %}
+    <p class="hint">{{ t.tr("ota.need_device") }}</p>
+    {% endif %}
+    {% else %}
+    <p class="muted">{{ t.tr("ota.no_perm_start") }}</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head"><h3>{{ t.tr("ota.jobs") }}</h3><span class="muted">{{ t.tr("ota.auto_refresh") }}</span></div>
+  {% if jobs.len() == 0 %}
+  <p class="muted">{{ t.tr("ota.no_jobs") }}</p>
+  {% else %}
+  <div class="job-list">
+    {% for job in jobs %}
+      {% include "ota_progress.html" %}
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <div class="panel-head"><h3>{{ t.tr("ota.library") }}</h3><span class="muted">{{ firmware.len() }} {{ t.tr("ota.pkg_count") }}</span></div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>{{ t.tr("ota.col_version") }}</th><th>{{ t.tr("ota.col_file") }}</th><th>{{ t.tr("ota.col_size") }}</th><th>{{ t.tr("ota.col_sha") }}</th><th>{{ t.tr("ota.col_uploader") }}</th><th>{{ t.tr("ota.col_time") }}</th></tr>
+      </thead>
+      <tbody>
+        {% for f in firmware %}
+        <tr>
+          <td><strong>v{{ f.version }}</strong></td>
+          <td class="mono">{{ f.filename }}</td>
+          <td>{{ f.size }}</td>
+          <td class="mono">{{ f.sha256 }}…</td>
+          <td>{{ f.uploaded_by }}</td>
+          <td class="mono">{{ f.uploaded }}</td>
+        </tr>
+        {% endfor %}
+        {% if firmware.len() == 0 %}
+        <tr><td colspan="6" class="muted center">{{ t.tr("ota.library_empty") }}</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

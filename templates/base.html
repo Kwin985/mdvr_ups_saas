@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="{{ t.html_lang() }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ t.site_title() }}{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css?v=3">
+  <script>
+    // 尽早应用菜单收起状态，避免刷新时侧栏闪一下再收起
+    try {
+      if (localStorage.getItem("ups.menu.collapsed") === "1") {
+        document.documentElement.classList.add("menu-collapsed");
+      }
+    } catch (e) { /* 隐私模式下忽略 */ }
+  </script>
+  <script src="/static/htmx.min.js" defer></script>
+  <script src="/static/shell.js?v=3" defer></script>
+  <script>window.I18N = {{ i18n_js|safe }};</script>
+  {% block head %}{% endblock %}
+</head>
+<body>
+<header class="topbar">
+  <div class="nav-brand">
+    <button class="menu-toggle" type="button" data-menu-toggle title="{{ t.tr("menu.collapse") }}" aria-label="{{ t.tr("menu.collapse") }}">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M4 7h16M4 12h16M4 17h16" stroke-linecap="round"/>
+      </svg>
+    </button>
+    <span class="brand-logo">
+      <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.9">
+        <path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12l1-8.5Z" stroke-linejoin="round"/>
+      </svg>
+    </span>
+    <span class="brand-text">{{ t.site_title() }}</span>
+  </div>
+
+  <div class="topbar-stats">
+    <div class="stat-item">{{ t.tr("topbar.devices") }} <span class="stat-value" id="statDevices">—</span></div>
+    <div class="stat-item">{{ t.tr("topbar.online") }} <span class="stat-value" id="statOnline">—</span></div>
+    <div class="stat-item">{{ t.tr("topbar.abnormal") }} <span class="stat-value alarm" id="statAbnormal">—</span></div>
+    <div class="stat-item">{{ t.tr("topbar.users") }} <span class="stat-value" id="statUsers">—</span></div>
+    <div class="stat-item"><span id="clock">--:--:--</span></div>
+  </div>
+
+  <div class="user-area">
+    <span class="user-name"><b>{{ user.username }}</b> · {{ user.role }}</span>
+    <form method="post" action="/logout">
+      <button class="icon-btn logout" type="submit" title="{{ t.tr("user.logout") }}">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M9 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h3" stroke-linecap="round"/>
+          <path d="M15 8l4 4-4 4M19 12H9" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    </form>
+  </div>
+</header>
+
+<div class="main">
+  <aside class="app-menu" id="appMenu">
+    <div class="menu-title">
+      <span class="menu-title-text">{{ t.tr("menu.title") }}</span>
+      <button class="menu-collapse" type="button" data-menu-toggle title="{{ t.tr("menu.collapse_short") }}" aria-label="{{ t.tr("menu.collapse_short") }}">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M14 6l-6 6 6 6" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    </div>
+    <nav class="nav">
+      <a class="nav-item {% if active == "monitor" %}active{% endif %}" href="/monitor" title="{{ t.tr("nav.monitor") }}">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7">
+          <rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 20h8M12 17v3" stroke-linecap="round"/>
+        </svg>
+        <span class="nav-label">{{ t.tr("nav.monitor") }}</span>
+      </a>
+      <a class="nav-item {% if active == "analysis" %}active{% endif %}" href="/analysis" title="{{ t.tr("nav.analysis") }}">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7">
+          <path d="M3 20h18" stroke-linecap="round"/>
+          <path d="M5 20v-6M10.5 20V8M16 20v-9M21 20V4" stroke-linecap="round"/>
+        </svg>
+        <span class="nav-label">{{ t.tr("nav.analysis") }}</span>
+      </a>
+      <a class="nav-item {% if active == "ota" %}active{% endif %}" href="/ota" title="{{ t.tr("nav.ota") }}">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7">
+          <path d="M12 16V4m0 0 4 4m-4-4L8 8" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M4 16v2.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V16" stroke-linecap="round"/>
+        </svg>
+        <span class="nav-label">{{ t.tr("nav.ota") }}</span>
+      </a>
+      <a class="nav-item {% if active == "users" %}active{% endif %}" href="/admin/users" title="{{ t.tr("nav.users") }}">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7">
+          <circle cx="9" cy="8" r="3.2"/><path d="M3.5 20c0-3 2.5-5 5.5-5s5.5 2 5.5 5" stroke-linecap="round"/>
+          <path d="M16 5.2a3 3 0 0 1 0 5.6M17.5 20c0-2.2-.8-3.9-2-5" stroke-linecap="round"/>
+        </svg>
+        <span class="nav-label">{{ t.tr("nav.users") }}</span>
+      </a>
+      {% if user.role == "admin" %}
+      <a class="nav-item {% if active == "settings" %}active{% endif %}" href="/admin/settings" title="{{ t.tr("nav.settings") }}">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.65 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9v0a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1.03Z" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="nav-label">{{ t.tr("nav.settings") }}</span>
+      </a>
+      {% endif %}
+    </nav>
+
+    <div class="sidebar-foot">
+      <div class="user-chip">
+        <span class="avatar">{{ user.initial() }}</span>
+        <div class="user-meta">
+          <span class="user-name">{{ user.username }}</span>
+          <span class="role-badge">{{ user.role }}</span>
+        </div>
+      </div>
+      <span class="tree-hint sidebar-note">{{ t.tr("sidebar.note") }}</span>
+    </div>
+  </aside>
+
+  <div class="app-main">
+    {% block content %}{% endblock %}
+  </div>
+</div>
+</body>
+</html>

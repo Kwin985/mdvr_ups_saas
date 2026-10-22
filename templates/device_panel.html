@@ -1,0 +1,144 @@
+<div id="devicePanel">
+  <div class="panel">
+    <div class="panel-head">
+      <h3 class="mono">{{ sn }}</h3>
+      <span class="muted">{{ t.tr("panel.link_tip") }} {{ mdvr_id }} · {{ t.tr("panel.serial_tip") }} {{ address }} · {{ t.tr("panel.baud_tip") }} {{ baudrate }} bps · {{ t.tr("panel.report_tip") }} {{ report_interval }}s</span>
+      {% if can_ota %}<a class="btn primary small" href="/ota?sn={{ sn }}" style="margin-left:auto">{{ t.tr("panel.start_ota") }}</a>{% endif %}
+    </div>
+    {% include "device_live.html" %}
+  </div>
+
+  <div class="two-col">
+    <div class="panel">
+      <div class="panel-head"><h3>{{ t.tr("panel.battery_trend") }}</h3><span class="muted">{{ t.tr("panel.agg_5m") }}</span></div>
+      {{ battery_chart|safe }}
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3>{{ t.tr("panel.temp_trend") }}</h3><span class="muted">{{ t.tr("panel.agg_5m") }}</span></div>
+      {{ temp_chart|safe }}
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h3>{{ t.tr("panel.voltage_trend") }}</h3><span class="muted">{{ t.tr("panel.agg_5m") }}</span></div>
+    {{ voltage_chart|safe }}
+  </div>
+
+  <div class="two-col">
+    <div class="panel">
+      <div class="panel-head"><h3>{{ t.tr("panel.ops") }}</h3></div>
+      {% if can_control %}
+      <div class="op-row">
+        <button class="btn primary" type="button"
+                hx-post="/devices/{{ sn }}/command" hx-vals='{"action":"version"}'
+                hx-target="#cmd-result" hx-swap="innerHTML">{{ t.tr("panel.op_version") }}</button>
+        <button class="btn danger" type="button"
+                hx-post="/devices/{{ sn }}/command" hx-vals='{"action":"restart"}'
+                hx-confirm="{{ t.tr("panel.op_restart_confirm") }}"
+                hx-target="#cmd-result" hx-swap="innerHTML">{{ t.tr("panel.op_restart") }}</button>
+        <a class="btn ghost" href="/analysis?sn={{ sn }}">{{ t.tr("panel.op_analysis") }}</a>
+      </div>
+      <form class="op-sn" hx-post="/devices/{{ sn }}/command" hx-target="#cmd-result" hx-swap="innerHTML">
+        <input type="hidden" name="action" value="set_sn">
+        <label>{{ t.tr("panel.op_sn") }}
+          <input name="value" maxlength="20" placeholder="{{ t.tr("panel.op_sn_ph") }}" required>
+        </label>
+        <button class="btn primary" type="submit">{{ t.tr("panel.op_write") }}</button>
+      </form>
+      <p class="hint" style="margin-top:8px">{{ t.tr("panel.cmd_hint") }}</p>
+      {% else %}
+      <p class="muted">{{ t.tr("panel.readonly_role") }}</p>
+      {% endif %}
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h3>{{ t.tr("panel.params") }}</h3></div>
+      {% if can_control %}
+      <div class="param-grid">
+        <form class="param-row" hx-post="/devices/{{ sn }}/command" hx-target="#cmd-result" hx-swap="innerHTML">
+          <input type="hidden" name="action" value="set_address">
+          <span class="param-label">{{ t.tr("panel.param_address") }}</span>
+          <input name="value" type="number" min="0" max="247" value="{{ address }}" required>
+          <button class="btn primary" type="submit">{{ t.tr("panel.param_set") }}</button>
+        </form>
+        <form class="param-row" hx-post="/devices/{{ sn }}/command" hx-target="#cmd-result" hx-swap="innerHTML">
+          <input type="hidden" name="action" value="set_baudrate">
+          <span class="param-label">{{ t.tr("panel.param_baud") }}</span>
+          <select name="value">{{ baud_options|safe }}</select>
+          <button class="btn primary" type="submit">{{ t.tr("panel.param_set") }}</button>
+        </form>
+        <form class="param-row" hx-post="/devices/{{ sn }}/command" hx-target="#cmd-result" hx-swap="innerHTML">
+          <input type="hidden" name="action" value="set_interval">
+          <span class="param-label">{{ t.tr("panel.param_interval") }}</span>
+          <div class="param-suffix">
+            <input name="value" type="number" min="1" max="3600" value="{{ report_interval }}" required>
+            <span>{{ t.tr("panel.param_seconds") }}</span>
+          </div>
+          <button class="btn primary" type="submit">{{ t.tr("panel.param_set") }}</button>
+        </form>
+      </div>
+      <p class="hint" style="margin-top:8px">{{ t.tr("panel.param_hint") }}</p>
+      {% else %}
+      <p class="muted">{{ t.tr("panel.readonly_role") }}</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <div id="cmd-result" class="cmd-result"></div>
+
+  <div class="panel">
+    <div class="panel-head"><h3>{{ t.tr("panel.device_info") }}</h3></div>
+    <dl class="kv">
+      <dt>{{ t.tr("panel.kv_sn") }}</dt><dd class="mono">{{ sn }}</dd>
+      <dt>{{ t.tr("panel.kv_mdvr") }}</dt><dd class="mono">{{ mdvr_id }}</dd>
+      <dt>{{ t.tr("panel.kv_owner") }}</dt><dd>{{ owner_label }}</dd>
+      <dt>{{ t.tr("panel.kv_group") }}</dt><dd>{{ group_name }}</dd>
+      <dt>{{ t.tr("panel.kv_firmware") }}</dt><dd class="mono">{{ firmware }}</dd>
+      <dt>{{ t.tr("panel.kv_address") }}</dt><dd>{{ address }}</dd>
+      <dt>{{ t.tr("panel.kv_baudrate") }}</dt><dd>{{ baudrate }} bps</dd>
+      <dt>{{ t.tr("panel.kv_interval") }}</dt><dd>{{ report_interval }} s</dd>
+    </dl>
+  </div>
+
+  {% if can_assign %}
+  <div class="panel">
+    <div class="panel-head"><h3>{{ t.tr("panel.assign") }}</h3><span class="muted">{{ t.tr("panel.assign_tip") }}</span></div>
+    <form class="assign-form" hx-post="/devices/{{ sn }}/assign" hx-target="#assign-result" hx-swap="innerHTML">
+      <label>{{ t.tr("panel.assign_owner") }}
+        <select name="owner">
+          <option value="">{{ t.tr("panel.assign_unassigned") }}</option>
+          {% for o in owners %}
+          <option value="{{ o }}" {% if o.as_str() == owner.as_str() %}selected{% endif %}>{{ o }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>{{ t.tr("panel.assign_group") }}
+        <input name="group" value="{{ group_name }}" placeholder="{{ t.tr("common.default_group") }}">
+      </label>
+      <button class="btn primary" type="submit">{{ t.tr("panel.assign_save") }}</button>
+    </form>
+    <div id="assign-result" class="cmd-result"></div>
+  </div>
+  {% endif %}
+
+  <div class="panel">
+    <div class="panel-head">
+      <h3>{{ t.tr("panel.history_24h") }}</h3>
+      <a class="link" href="/analysis?sn={{ sn }}" style="margin-left:auto">{{ t.tr("panel.history_open_analysis") }}</a>
+    </div>
+    <div id="history" hx-get="/devices/{{ sn }}/history" hx-trigger="load" hx-swap="innerHTML">
+      <p class="muted">{{ t.tr("panel.history_loading") }}</p>
+    </div>
+  </div>
+
+  {% if jobs.len() > 0 %}
+  <div class="panel">
+    <div class="panel-head"><h3>{{ t.tr("panel.records") }}</h3><a class="link" href="/ota">{{ t.tr("panel.ota_console") }}</a></div>
+    <div class="job-list">
+      {% for job in jobs %}
+        {% include "ota_progress.html" %}
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>
