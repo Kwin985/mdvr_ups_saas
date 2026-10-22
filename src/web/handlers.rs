@@ -267,6 +267,17 @@ struct LoginTemplate {
 #[template(path = "ups.html")]
 struct UpsShowcaseTemplate {
     t: Tr,
+    /// 本页当前语言（已归一化），模板用它高亮中/EN 切换按钮
+    lang: String,
+}
+
+#[derive(Deserialize)]
+pub struct UpsQuery {
+    /// 本页语言覆盖（`?lang=en-US`）。
+    ///
+    /// 这是给客户看的公开页，不能要求对方先去后台改站点语言才能看英文版，
+    /// 所以允许 URL 参数临时覆盖；不写库、不影响控制台。
+    lang: Option<String>,
 }
 
 #[derive(Template)]
@@ -438,9 +449,18 @@ pub struct LoginQuery {
 }
 
 /// 产品展示页，公开访问。放在登录页之外，方便销售/客户直接看型号与接线图。
-pub async fn ups_showcase(State(state): State<AppState>) -> Response {
+pub async fn ups_showcase(
+    State(state): State<AppState>,
+    Query(q): Query<UpsQuery>,
+) -> Response {
+    // 只接受白名单里的语言，非法值静默回落到站点设置，避免 `?lang=xx` 打出乱码页
+    let lang = q
+        .lang
+        .filter(|l| crate::settings::SUPPORTED_LANGS.iter().any(|(k, _)| k == l))
+        .unwrap_or_else(|| state.settings.lang());
     UpsShowcaseTemplate {
-        t: Tr::from(state.settings.lang()).with_site(state.settings.str("site_title")),
+        t: Tr::from(lang.clone()).with_site(state.settings.str("site_title")),
+        lang,
     }
     .render()
     .map(|h| Html(h).into_response())

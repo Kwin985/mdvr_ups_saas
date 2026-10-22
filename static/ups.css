@@ -87,6 +87,34 @@
 }
 .ups-back:hover { color: var(--accent); border-color: var(--accent); }
 
+/* 语言切换：公开页给客户用，样式保持克制，不抢返回按钮的视觉重量 */
+.ups-nav-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.ups-langs {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.ups-langs a {
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+  transition: color .18s, background .18s;
+}
+.ups-langs a:hover { color: var(--text-soft); }
+.ups-langs a.is-on {
+  background: rgba(79, 195, 247, 0.16);
+  color: #4fc3f7;
+  font-weight: 600;
+}
+@media (max-width: 640px) {
+  .ups-langs a { padding: 4px 8px; font-size: 11.5px; }
+}
+
 /* ---------- 主体 ---------- */
 .ups-main {
   position: relative;
