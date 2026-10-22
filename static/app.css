@@ -745,6 +745,45 @@ tbody tr:hover td { background: rgba(79, 195, 247, 0.05); }
 .login-submit:hover { transform: translateY(-1px); filter: brightness(1.05); box-shadow: 0 14px 32px rgba(46, 168, 230, 0.42); }
 .login-submit:active { transform: translateY(0); }
 
+/* 登录页上的 UPS 产品展示入口（指向 /ups，公开页） */
+.login-ups-entry {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-top: 18px;
+  padding: 11px 13px;
+  border: 1px solid rgba(30, 77, 123, 0.85);
+  border-radius: 10px;
+  background: rgba(17, 34, 51, 0.62);
+  color: #aabbcc;
+  transition: border-color .18s, background .18s, color .18s;
+}
+.login-ups-entry:hover {
+  border-color: rgba(79, 195, 247, 0.6);
+  background: rgba(79, 195, 247, 0.08);
+  color: #4fc3f7;
+}
+.login-ups-entry .entry-ico {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: rgba(79, 195, 247, 0.12);
+  color: #4fc3f7;
+}
+.login-ups-entry .entry-text { display: flex; flex-direction: column; line-height: 1.3; min-width: 0; }
+.login-ups-entry .entry-text strong { font-size: 12.5px; font-weight: 600; }
+.login-ups-entry .entry-text em {
+  font-style: normal;
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: #6688aa;
+}
+.login-ups-entry .entry-arrow { flex: none; margin-left: auto; opacity: .6; transition: transform .18s, opacity .18s; }
+.login-ups-entry:hover .entry-arrow { transform: translateX(2px); opacity: 1; }
+
 .login-foot { margin-top: 16px; text-align: center; font-size: 10.5px; letter-spacing: 0.06em; color: #3f5a72; }
 
 @media (max-width: 880px) {

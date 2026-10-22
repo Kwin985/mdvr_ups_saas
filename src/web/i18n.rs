@@ -179,6 +179,19 @@ mod tests {
         assert_eq!(lookup("en-US", "nav.monitor"), "Live Monitor");
     }
 
+    /// `/ups` 是纯文案页，几十条键全靠词典。英文漏一条就会在英文部署下突然冒出
+    /// 一句中文（回退逻辑），非常扎眼。这里强制 ups.* 中英齐全。
+    #[test]
+    fn ups_showcase_keys_have_english() {
+        let missing: Vec<&str> = ZH_ENTRIES
+            .iter()
+            .map(|(k, _)| *k)
+            .filter(|k| k.starts_with("ups."))
+            .filter(|k| !EN_ENTRIES.iter().any(|(ek, _)| ek == k))
+            .collect();
+        assert!(missing.is_empty(), "英文词典缺少这些 ups.* 键：{missing:?}");
+    }
+
     #[test]
     fn en_missing_falls_back_to_zh() {
         // en 未收录的键（如品牌名）回退中文，不出现空串/键名

@@ -261,6 +261,14 @@ struct LoginTemplate {
     next: String,
 }
 
+/// UPS 产品展示页：**不需要登录**，作为登录页上的对外入口。
+/// 只依赖系统设置里的语言与站点名，不碰任何业务数据。
+#[derive(Template)]
+#[template(path = "ups.html")]
+struct UpsShowcaseTemplate {
+    t: Tr,
+}
+
 #[derive(Template)]
 #[template(path = "analysis.html")]
 struct AnalysisTemplate {
@@ -427,6 +435,16 @@ pub async fn login_page(State(state): State<AppState>, Query(q): Query<LoginQuer
 #[derive(Deserialize)]
 pub struct LoginQuery {
     next: Option<String>,
+}
+
+/// 产品展示页，公开访问。放在登录页之外，方便销售/客户直接看型号与接线图。
+pub async fn ups_showcase(State(state): State<AppState>) -> Response {
+    UpsShowcaseTemplate {
+        t: Tr::from(state.settings.lang()).with_site(state.settings.str("site_title")),
+    }
+    .render()
+    .map(|h| Html(h).into_response())
+    .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 #[derive(Deserialize)]

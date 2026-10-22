@@ -330,7 +330,9 @@ fn env_defaults(cfg: &Config) -> Vec<(String, String)> {
             "ota_begin_interval_ms".into(),
             cfg.ota_begin_interval_ms.to_string(),
         ),
-        ("language".into(), DEFAULT_LANG.into()),
+        // 与 UPS_SITE_TITLE 同一模式：只在首次建库时播种，之后以页面设置为准。
+        // 英文部署可以不进后台直接 UPS_LANGUAGE=en-US。
+        ("language".into(), env_or("UPS_LANGUAGE", DEFAULT_LANG)),
     ]
 }
 

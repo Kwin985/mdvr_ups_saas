@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="{{ t.html_lang() }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>{{ t.site_title() }} · {{ t.tr("ups.title") }}</title>
+  <link rel="stylesheet" href="/static/app.css?v=3">
+  <link rel="stylesheet" href="/static/ups.css?v=1">
+</head>
+<body class="ups-body">
+  <div class="ups-bg" aria-hidden="true">
+    <span class="bg-grid"></span>
+    <span class="bg-glow a"></span>
+    <span class="bg-glow b"></span>
+  </div>
+
+  <header class="ups-nav">
+    <a class="ups-brand" href="/login">
+      <span class="brand-mark">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+          <path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12l1-8.5Z" stroke-linejoin="round"/>
+        </svg>
+      </span>
+      <span class="brand-text">
+        <strong>{{ t.site_title() }}</strong>
+        <em>{{ t.tr("ups.tag") }}</em>
+      </span>
+    </a>
+    <a class="ups-back" href="/login">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H7M11 6l-6 6 6 6"/></svg>
+      <span>{{ t.tr("ups.back") }}</span>
+    </a>
+  </header>
+
+  <main class="ups-main">
+
+    <section class="ups-hero">
+      <div class="hero-copy">
+        <span class="hero-tag"><i class="dot"></i>{{ t.tr("ups.tag") }}</span>
+        <h1>{{ t.tr("ups.hero_a") }}<span>{{ t.tr("ups.hero_b") }}</span></h1>
+        <p class="hero-lead">{{ t.tr("ups.lead") }}</p>
+        <div class="hero-chips">
+          <span class="chip">{{ t.tr("ups.chip1") }}</span>
+          <span class="chip">{{ t.tr("ups.chip2") }}</span>
+          <span class="chip">{{ t.tr("ups.chip3") }}</span>
+          <span class="chip">{{ t.tr("ups.chip4") }}</span>
+        </div>
+        <a class="btn primary" href="#diagram">
+          <span>{{ t.tr("ups.diagram_title") }}</span>
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"/></svg>
+        </a>
+      </div>
+      <figure class="hero-figure">
+        <img src="/static/img/ups/mx-ups-05.png" alt="MX-UPS-05" width="800" height="533" loading="eager">
+        <figcaption><b>MX-UPS-05</b> · DC IN 8–36V · 3.35Ah (49.6Wh) · 14.8V</figcaption>
+      </figure>
+    </section>
+
+    <section class="ups-section">
+      <h2 class="sec-title">{{ t.tr("ups.why_title") }}</h2>
+      <div class="card-grid">
+        <article class="ups-card">
+          <i class="card-ico"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h11v12H4zM15 10h3l2 2v6h-5"/><circle cx="7.5" cy="18.5" r="1.6"/><circle cx="17" cy="18.5" r="1.6"/></svg></i>
+          <h3>{{ t.tr("ups.why1_t") }}</h3>
+          <p>{{ t.tr("ups.why1_d") }}</p>
+        </article>
+        <article class="ups-card">
+          <i class="card-ico"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c3.5 4 6 7 6 10a6 6 0 0 1-12 0c0-3 2.5-6 6-10Z"/></svg></i>
+          <h3>{{ t.tr("ups.why2_t") }}</h3>
+          <p>{{ t.tr("ups.why2_d") }}</p>
+          <img class="card-img" src="/static/img/ups/waterproof.jpg" alt="IP66" width="800" height="800" loading="lazy">
+        </article>
+        <article class="ups-card">
+          <i class="card-ico"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13h4l2-5 3 10 2-5h7"/></svg></i>
+          <h3>{{ t.tr("ups.why3_t") }}</h3>
+          <p>{{ t.tr("ups.why3_d") }}</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="ups-section" id="models">
+      <h2 class="sec-title">{{ t.tr("ups.models_title") }}</h2>
+      <p class="sec-lead">{{ t.tr("ups.models_lead") }}</p>
+      <div class="table-wrap">
+        <table class="ups-table">
+          <thead>
+            <tr>
+              <th>{{ t.tr("ups.th_model") }}</th>
+              <th>{{ t.tr("ups.th_cap") }}</th>
+              <th>{{ t.tr("ups.th_status") }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td class="mono">MX-UPS-03</td><td class="mono">3000 mAh</td><td><span class="pill muted">{{ t.tr("ups.st_prev") }}</span></td></tr>
+            <tr><td class="mono">MX-UPS-03-01</td><td class="mono">2600 mAh</td><td><span class="pill muted">{{ t.tr("ups.st_prev") }}</span></td></tr>
+            <tr><td class="mono">MX-UPS-04</td><td class="mono">6000 mAh</td><td><span class="pill muted">{{ t.tr("ups.st_prev") }}</span></td></tr>
+            <tr class="hl"><td class="mono">MX-UPS-05</td><td class="mono">3350 mAh / 49.6 Wh</td><td><span class="pill ok">{{ t.tr("ups.st_std") }}</span></td></tr>
+            <tr><td class="mono">MX-UPS-06</td><td class="mono">15000 mAh</td><td><span class="pill warn">{{ t.tr("ups.st_custom") }}</span></td></tr>
+            <tr class="hl"><td class="mono">MX-UPS-07</td><td class="mono">6700 mAh / 99.2 Wh</td><td><span class="pill ok">{{ t.tr("ups.st_ext") }}</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="ups-section" id="spec">
+      <h2 class="sec-title">{{ t.tr("ups.spec_title") }}</h2>
+      <p class="sec-lead">{{ t.tr("ups.spec_lead") }}</p>
+      <div class="table-wrap">
+        <table class="ups-table spec">
+          <tbody>
+            <tr><th>{{ t.tr("ups.sp_case") }}</th><td>Aluminium alloy</td></tr>
+            <tr><th>{{ t.tr("ups.sp_in") }}</th><td class="mono">DC 8–36V</td></tr>
+            <tr><th>{{ t.tr("ups.sp_bat") }}</th><td>18650 Li-ion pack</td></tr>
+            <tr><th>{{ t.tr("ups.sp_v") }}</th><td class="mono">14.8V (4 × 3.70V)</td></tr>
+            <tr><th>{{ t.tr("ups.sp_full") }}</th><td class="mono">16.8V (4 × 4.20V)</td></tr>
+            <tr><th>{{ t.tr("ups.sp_cut") }}</th><td class="mono">11V (4 × 2.75V)</td></tr>
+            <tr><th>{{ t.tr("ups.sp_ichg") }}</th><td class="mono">2A</td></tr>
+            <tr><th>{{ t.tr("ups.sp_tchg") }}</th><td>3350mAh ≈ 1.6h (≤2h) · 6700mAh ≈ 3.5h (≤4h)</td></tr>
+            <tr><th>{{ t.tr("ups.sp_iout") }}</th><td class="mono">7A</td></tr>
+            <tr><th>{{ t.tr("ups.sp_size") }}</th><td class="mono">99.7 × 48 × 79 mm / 140.2 × 48 × 79 mm ±2mm</td></tr>
+            <tr><th>{{ t.tr("ups.sp_weight") }}</th><td>≈700g ±10% / ≈1400g ±10%</td></tr>
+            <tr><th>{{ t.tr("ups.sp_ip") }}</th><td class="mono">IP66</td></tr>
+            <tr><th>{{ t.tr("ups.sp_temp") }}</th><td>0~45℃ / −20~60℃ / −20~50℃</td></tr>
+            <tr><th>{{ t.tr("ups.sp_conv") }}</th><td>10–19V step-up 92% · 19–36V step-down 96%, auto · 16AWG (1.3mm²)</td></tr>
+            <tr><th>{{ t.tr("ups.sp_out") }}</th><td>Input 0–9V → battery 12–16.5V · Input 9–36V → follows input 8–36V</td></tr>
+            <tr><th>{{ t.tr("ups.sp_run") }}</th><td class="mono">49.6Wh / 18W = 2.76h · 99.2Wh / 18W = 5.51h</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="ups-section two-col">
+      <div>
+        <h2 class="sec-title">{{ t.tr("ups.cable_title") }}</h2>
+        <p class="sec-lead">{{ t.tr("ups.cable_lead") }}</p>
+        <div class="table-wrap">
+          <table class="ups-table">
+            <thead>
+              <tr><th>{{ t.tr("ups.th_ver") }}</th><th>{{ t.tr("ups.th_conn") }}</th></tr>
+            </thead>
+            <tbody>
+              <tr><td class="mono">V1.0</td><td>5-pin aviation, in 150mm / out 200mm</td></tr>
+              <tr><td class="mono">V2.0</td><td>6-pin square, in 150mm / out 200mm</td></tr>
+              <tr><td class="mono">V3.0</td><td>9-pin aviation, in 150mm / out 200mm</td></tr>
+              <tr><td class="mono">V4.0</td><td>DJ7031-6.3-11 / DJ7031-6.3-21 · RS485 optional (DJ7031-2.8-21, 180mm)</td></tr>
+              <tr><td class="mono">V5.0</td><td>DJ7031-6.3-21, in 150mm / out 200mm</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div>
+        <h2 class="sec-title">{{ t.tr("ups.wire_title") }}</h2>
+        <p class="sec-lead">&nbsp;</p>
+        <div class="table-wrap">
+          <table class="ups-table">
+            <thead>
+              <tr><th>{{ t.tr("ups.th_line") }}</th><th>{{ t.tr("ups.th_color") }}</th><th>{{ t.tr("ups.th_def") }}</th></tr>
+            </thead>
+            <tbody>
+              <tr><td rowspan="4">{{ t.tr("ups.w_in") }}</td><td><i class="sw red"></i>Red</td><td>{{ t.tr("ups.w_plus") }}</td></tr>
+              <tr><td><i class="sw black"></i>Black</td><td>{{ t.tr("ups.w_minus") }}</td></tr>
+              <tr><td><i class="sw yellow"></i>Yellow</td><td>{{ t.tr("ups.w_acc") }}</td></tr>
+              <tr><td><i class="sw green"></i>Green</td><td>{{ t.tr("ups.w_nc") }}</td></tr>
+              <tr><td rowspan="4">{{ t.tr("ups.w_out") }}</td><td><i class="sw red"></i>Red</td><td>{{ t.tr("ups.w_nc") }}</td></tr>
+              <tr><td><i class="sw black"></i>Black</td><td>{{ t.tr("ups.w_minus") }}</td></tr>
+              <tr><td><i class="sw yellow"></i>Yellow</td><td>{{ t.tr("ups.w_acc") }}</td></tr>
+              <tr><td><i class="sw green"></i>Green</td><td>{{ t.tr("ups.w_plus") }}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="ups-section" id="diagram">
+      <h2 class="sec-title">{{ t.tr("ups.diagram_title") }}</h2>
+      <p class="sec-lead">{{ t.tr("ups.diagram_lead") }}</p>
+      <div class="diagram-wrap">
+        <svg class="sys" viewBox="0 0 1000 360" role="img" aria-label="{{ t.tr("ups.diagram_title") }}">
+          <defs>
+            <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 10 5 0 10Z" fill="#4fc3f7"/>
+            </marker>
+            <marker id="ah-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 10 5 0 10Z" fill="#ff9800"/>
+            </marker>
+          </defs>
+
+          <!-- 点火开关 -->
+          <rect x="150" y="26" width="106" height="46" rx="9" fill="#0f2136" stroke="#1e4d7b" stroke-width="1.6"/>
+          <text x="203" y="54" text-anchor="middle" fill="#e2e8f0" font-size="14">{{ t.tr("ups.dg_ign") }}</text>
+
+          <!-- ACC 总线：点火开关 → UPS 与 MDVR -->
+          <path d="M203 72 V108 H660" fill="none" stroke="#ff9800" stroke-width="2"/>
+          <path d="M430 108 V142" fill="none" stroke="#ff9800" stroke-width="2" marker-end="url(#ah-acc)"/>
+          <path d="M660 108 V172" fill="none" stroke="#ff9800" stroke-width="2" marker-end="url(#ah-acc)"/>
+          <text x="500" y="101" text-anchor="middle" fill="#ff9800" font-size="11.5" font-weight="600">ACC</text>
+
+          <!-- 车载电池 -->
+          <rect x="24" y="186" width="116" height="78" rx="9" fill="#0f2136" stroke="#1e4d7b" stroke-width="1.6"/>
+          <text x="82" y="216" text-anchor="middle" fill="#e2e8f0" font-size="13.5">{{ t.tr("ups.dg_battery") }}</text>
+          <text x="82" y="238" text-anchor="middle" fill="#6688aa" font-size="11.5" font-family="ui-monospace, Consolas, monospace">12V / 24V</text>
+
+          <!-- 保险丝盒 -->
+          <rect x="180" y="196" width="100" height="58" rx="9" fill="#0f2136" stroke="#1e4d7b" stroke-width="1.6"/>
+          <text x="230" y="230" text-anchor="middle" fill="#e2e8f0" font-size="13">{{ t.tr("ups.dg_fuse") }}</text>
+
+          <!-- MX-UPS -->
+          <rect x="340" y="146" width="186" height="158" rx="12" fill="#112233" stroke="#4fc3f7" stroke-width="2"/>
+          <text x="433" y="174" text-anchor="middle" fill="#4fc3f7" font-size="15" font-weight="700">{{ t.tr("ups.dg_ups") }}</text>
+          <rect x="366" y="190" width="134" height="46" rx="6" fill="#0a1628" stroke="#16324d" stroke-width="1.2"/>
+          <g fill="#4caf50">
+            <rect x="374" y="199" width="22" height="28" rx="3"/>
+            <rect x="402" y="199" width="22" height="28" rx="3"/>
+            <rect x="430" y="199" width="22" height="28" rx="3"/>
+            <rect x="458" y="199" width="22" height="28" rx="3"/>
+          </g>
+          <text x="433" y="256" text-anchor="middle" fill="#aabbcc" font-size="11.5">18650 ×4 · 14.8V</text>
+          <text x="433" y="280" text-anchor="middle" fill="#6688aa" font-size="11" font-family="ui-monospace, Consolas, monospace">8–36V in / 8–36V out</text>
+
+          <!-- MDVR -->
+          <rect x="590" y="176" width="170" height="112" rx="10" fill="#0f2136" stroke="#1e4d7b" stroke-width="1.6"/>
+          <text x="675" y="224" text-anchor="middle" fill="#e2e8f0" font-size="14">{{ t.tr("ups.dg_mdvr") }}</text>
+          <text x="675" y="246" text-anchor="middle" fill="#6688aa" font-size="11.5" font-family="ui-monospace, Consolas, monospace">4G · 8–36V</text>
+
+          <!-- 摄像头 -->
+          <rect x="820" y="186" width="150" height="92" rx="10" fill="#0f2136" stroke="#1e4d7b" stroke-width="1.6"/>
+          <text x="895" y="222" text-anchor="middle" fill="#e2e8f0" font-size="13">{{ t.tr("ups.dg_cam") }}</text>
+          <g fill="#4fc3f7">
+            <circle cx="858" cy="248" r="5"/><circle cx="880" cy="248" r="5"/>
+            <circle cx="902" cy="248" r="5"/><circle cx="924" cy="248" r="5"/>
+          </g>
+
+          <!-- 主供电回路 -->
+          <path d="M142 225 H176" fill="none" stroke="#4fc3f7" stroke-width="2.5" marker-end="url(#ah)"/>
+          <path d="M282 225 H336" fill="none" stroke="#4fc3f7" stroke-width="2.5" marker-end="url(#ah)"/>
+          <path d="M528 225 H586" fill="none" stroke="#4fc3f7" stroke-width="2.5" marker-end="url(#ah)"/>
+          <path d="M762 230 H816" fill="none" stroke="#4fc3f7" stroke-width="2.5" marker-end="url(#ah)"/>
+
+          <text x="309" y="215" text-anchor="middle" fill="#4caf50" font-size="11" font-weight="600">{{ t.tr("ups.dg_charge") }}</text>
+          <text x="557" y="215" text-anchor="middle" fill="#4caf50" font-size="10.5" font-weight="600">{{ t.tr("ups.dg_backup") }}</text>
+        </svg>
+
+        <ul class="dg-legend">
+          <li><i class="lg-line main"></i>{{ t.tr("ups.lg_main") }}</li>
+          <li><i class="lg-line acc"></i>{{ t.tr("ups.lg_acc") }}</li>
+          <li><i class="lg-cell"></i>{{ t.tr("ups.lg_batt") }}</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="ups-section two-col">
+      <div>
+        <h2 class="sec-title">{{ t.tr("ups.opt_title") }}</h2>
+        <article class="ups-card flat">
+          <h3>{{ t.tr("ups.opt1_t") }}</h3>
+          <p>{{ t.tr("ups.opt1_d") }}</p>
+        </article>
+        <article class="ups-card flat">
+          <h3>{{ t.tr("ups.opt2_t") }}</h3>
+          <p>{{ t.tr("ups.opt2_d") }}</p>
+        </article>
+        <p class="warn-note">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 8v5M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>
+          {{ t.tr("ups.opt_warn") }}
+        </p>
+      </div>
+      <div>
+        <h2 class="sec-title">{{ t.tr("ups.photo_title") }}</h2>
+        <p class="sec-lead">{{ t.tr("ups.photo_lead") }}</p>
+        <figure class="photo-figure">
+          <img src="/static/img/ups/mdvr-wiring.png" alt="{{ t.tr("ups.photo_title") }}" width="984" height="412" loading="lazy">
+        </figure>
+      </div>
+    </section>
+
+    <section class="ups-section">
+      <div class="two-col tight">
+        <div>
+          <h2 class="sec-title">{{ t.tr("ups.led_title") }}</h2>
+          <ul class="led-list">
+            <li><i class="led red"></i><span>{{ t.tr("ups.led_pwr") }}</span></li>
+            <li><i class="led green"></i><span>{{ t.tr("ups.led_chg") }}</span></li>
+          </ul>
+        </div>
+        <div>
+          <h2 class="sec-title">{{ t.tr("ups.docs_title") }}</h2>
+          <p class="sec-lead">{{ t.tr("ups.docs_lead") }}</p>
+          <ul class="doc-list">
+            <li><a href="https://mdvrfaq.com/products/item/acc-en-ups/" target="_blank" rel="noopener">
+              <span>{{ t.tr("ups.doc_std") }}</span>
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-8 8M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
+            </a></li>
+            <li><a href="https://mdvrfaq.com/products/item/acc-en-ups-07/" target="_blank" rel="noopener">
+              <span>{{ t.tr("ups.doc_ext") }}</span>
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-8 8M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
+            </a></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="ups-foot">{{ t.tr("ups.foot") }}</footer>
+</body>
+</html>

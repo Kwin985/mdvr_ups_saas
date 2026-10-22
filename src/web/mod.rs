@@ -81,6 +81,8 @@ pub fn router(state: AppState) -> Router {
             "/login",
             get(handlers::login_page).post(handlers::login_submit),
         )
+        // 产品展示页：登录前即可访问，是登录页上的对外入口
+        .route("/ups", get(handlers::ups_showcase))
         .route("/healthz", get(healthz))
         .route("/metrics", get(metrics_json))
         .nest_service("/static", ServeDir::new(state.cfg.static_dir.clone()))
