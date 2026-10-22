@@ -59,6 +59,9 @@ cargo run --release --bin simulator
 
 打开 <http://127.0.0.1:18080>，使用 `admin / admin123` 登录。
 
+登录页下方的「UPS 产品展示」入口指向公开页 `/ups`（无需登录），介绍 MX-UPS 各型号、
+尾线与线色定义，以及接车载 MDVR 的系统接线图与两种接线方案。对外演示时可直接发这个链接。
+
 演示账号（`UPS_SEED_DEMO=1` 或 `true` 时创建，**仅用于本地验收，生产不要开启**）：
 
 | 账号 | 密码 | 角色 |
@@ -94,6 +97,7 @@ cargo run --release --bin simulator
 | `UPS_JWT_SECRET` | `dev-secret-change-me-in-production` | JWT 签名密钥 |
 | `UPS_SESSION_IDLE_MIN` | `15` | 控制台空闲超时（分钟），超时后停止刷新并需重新登录 |
 | `UPS_ADMIN_USER` / `UPS_ADMIN_PASSWORD` | `admin` / `admin123` | 首次启动创建的管理员 |
+| `UPS_LANGUAGE` | `zh-CN` | 首次建库时的界面语言，可选 `zh-CN` / `en-US`；英文部署可不进后台直接设 |
 | `UPS_DB_THREADS` | 不设 = DuckDB 默认（核数） | DuckDB 线程上限，小规格云主机设 `1` |
 | `UPS_DB_MEMORY_LIMIT_MB` | 不设 = DuckDB 默认（内存 80%） | DuckDB 内存上限，1GB 机器建议 `256` |
 | `UPS_DB_ASYNC_THREADS` | 不设 = DuckDB 默认（`64`） | DuckDB 2.0 异步 I/O 线程池上限，小机器建议跟 `UPS_DB_THREADS` 同值 |
