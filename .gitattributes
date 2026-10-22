@@ -1,0 +1,3 @@
+# core.autocrlf=true 时新克隆的脚本会变成 CRLF，bash 会报 $'\r': command not found，
+# 所以显式锁定 shell 脚本用 LF。
+*.sh text eol=lf
