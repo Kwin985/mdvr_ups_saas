@@ -654,6 +654,29 @@ fn migrate_columns(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// DuckDB 2.0 文件头的格式标记（偏移 12 处的 u64）。
+const DUCKDB_V2_HEADER_MARKER: u64 = 999;
+
+/// 读 DuckDB 文件头偏移 12 处的 8 字节标记，用来区分「2.0 新格式」与「继承来的 1.x 旧格式」。
+///
+/// 这个值**不是** DuckDB 报错里那个 storage version：1.x 在这里写自己的存储版本（64~68），
+/// 而 2.0 换了文件头布局，**恒定写 999**——把 `storage_compatibility_version` 设成
+/// `v1.2.0` / `v1.5.0` / `latest` 实测都是 999。所以它只能当「谁写的这个文件」的指纹用。
+///
+/// 为什么要自己读文件头：2.0 打开**已存在**的 1.x 库会原地沿用旧格式，不会自动升级，
+/// 于是「跑的是 2.0、库还是老格式」这种半吊子状态很容易被忽略；而服务器运行时 DuckDB
+/// 独占文件，外部 `od`/`md5sum` 都报 Device or resource busy，只能在 open 之前读。
+fn header_format_marker(path: &std::path::Path) -> Option<u64> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut head = [0u8; 20];
+    f.read_exact(&mut head).ok()?;
+    if &head[8..12] != b"DUCK" {
+        return None;
+    }
+    Some(u64::from_le_bytes(head[12..20].try_into().ok()?))
+}
+
 /// DuckDB 资源上限（小规格云主机用）。
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DbLimits {
@@ -673,6 +696,29 @@ fn run_writer(
     ready: std::sync::mpsc::Sender<Result<()>>,
     stats: Arc<StoreStats>,
 ) {
+    // 打开前先看文件头，把「首启动新建」「2.0 新格式」「继承来的 1.x 旧格式」三种情况
+    // 分清楚。第三种最阴险：程序是 2.0 的、库还是老格式，看日志才发现得了。
+    match header_format_marker(&db_path) {
+        Some(DUCKDB_V2_HEADER_MARKER) => tracing::info!(
+            path = %db_path.display(),
+            "DuckDB 数据库文件已存在，为 2.0 新格式"
+        ),
+        Some(v @ 64..=68) => tracing::warn!(
+            marker = v,
+            path = %db_path.display(),
+            "DuckDB 数据库文件是 1.x 旧格式（2.0 会原地沿用、不自动升级）；\
+             开发调试期建议删库重建，才能吃到 2.0 的格式优化"
+        ),
+        Some(v) => tracing::warn!(
+            marker = v,
+            path = %db_path.display(),
+            "DuckDB 数据库文件格式无法识别，可能是更新的 DuckDB 写的"
+        ),
+        None => tracing::info!(
+            path = %db_path.display(),
+            "DuckDB 数据库文件不存在或非 DuckDB 文件，将按最新存储格式新建"
+        ),
+    }
     let conn = match Connection::open(&db_path) {
         Ok(c) => c,
         Err(e) => {
@@ -680,6 +726,10 @@ fn run_writer(
             return;
         }
     };
+    match conn.version() {
+        Ok(v) => tracing::info!(duckdb = %v, "DuckDB 引擎版本"),
+        Err(e) => tracing::warn!(error = %e, "读取 DuckDB 版本失败"),
+    }
     // 默认 DuckDB 会按物理核数开线程、按内存 80% 设上限；在 1GB / 0.25 vCPU 的
     // 小机器上必须手动收紧，否则一次大范围聚合就可能 OOM 或把 CPU 抢干。
     if let Some(t) = limits.threads {
@@ -2468,6 +2518,40 @@ mod tests {
             assert_eq!(n, 2);
         }
         let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 文件头解析的防回归测试：偏移 8 是 `DUCK` 魔数、偏移 12 是小端 u64 标记。
+    /// 这个布局是 DuckDB 私有格式，将来换版本可能变，所以必须让测试盯住它——
+    /// 一旦解析不出来，启动日志就会永远打印「非 DuckDB 文件」，误导运维。
+    #[test]
+    fn reads_header_format_marker() {
+        let dir = std::env::temp_dir().join(format!("ups_sv_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sv.duckdb");
+        let _ = std::fs::remove_file(&path);
+
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE t(a INTEGER); INSERT INTO t VALUES (1);")
+                .unwrap();
+            conn.execute_batch("CHECKPOINT").unwrap();
+        }
+
+        // 2.0 新建的库固定是 999（1.x 是 64~68）。故意写死：这个数一变就说明
+        // DuckDB 动了文件头布局，启动日志里的三分类判断必须重新核对。
+        assert_eq!(
+            header_format_marker(&path),
+            Some(DUCKDB_V2_HEADER_MARKER),
+            "文件头标记不是 2.0 的 999，可能 DuckDB 改了布局"
+        );
+
+        // 不存在的文件、以及非 DuckDB 文件都必须返回 None，不能瞎猜
+        assert_eq!(header_format_marker(&dir.join("nope.duckdb")), None);
+        let junk = dir.join("junk.bin");
+        std::fs::write(&junk, vec![0u8; 64]).unwrap();
+        assert_eq!(header_format_marker(&junk), None);
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
