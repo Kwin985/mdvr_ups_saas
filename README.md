@@ -130,6 +130,20 @@ cargo run --release --bin simulator
    1 万台按 180 天保留约 91 GB。
 5. 启动时会自检上述默认值并打 `WARN` 日志，见到告警即说明还没配好。
 
+### 启动方式
+
+密钥只从环境变量读（程序不加载 `.env`），手工 `export` 容易漏，漏了会静默退回默认密钥、
+只在日志里留一条 `WARN`。仓库提供了启动脚本：
+
+```bash
+cp .env.prod.example .env.prod   # 填入随机密钥；.env.prod 已被 .gitignore 忽略
+./run-prod.sh
+```
+
+`.env.prod` 里至少要设 `UPS_JWT_SECRET`。`UPS_ADMIN_PASSWORD` 只在**首次建库**时用于创建
+管理员，库已存在时改它不会改掉现有口令——改现有口令走「用户与权限」页，或直接 POST
+`/admin/users/password`（`username` + `password`）。
+
 ### 清空业务数据
 
 交付前或换环境时清掉所有测试/模拟数据（设备、历史样本、固件、OTA 任务、审计日志、非管理员账号），

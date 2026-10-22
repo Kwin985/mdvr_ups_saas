@@ -2,4 +2,6 @@
 /data
 *.log
 .env
+# 生产密钥（含 JWT 密钥与管理员口令），只提交 .env.prod.example 模板
+.env.prod
 .workbuddy-ai/
