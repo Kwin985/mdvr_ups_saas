@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use askama::Template;
-use axum::extract::{Multipart, Path, Query, State};
+use axum::extract::{ConnectInfo, Multipart, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::Form;
@@ -33,6 +33,8 @@ pub struct AppState {
     pub rbac: Arc<Rbac>,
     /// 系统配置（运行时可变）
     pub settings: Arc<SettingsStore>,
+    /// 登录防爆破（进程内存，重启即重置）
+    pub login_throttle: Arc<auth::LoginThrottle>,
 }
 
 // ---------------------------------------------------------------------------
@@ -53,10 +55,12 @@ where
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         tracing::error!(error = %self.0, "请求处理失败");
+        // 这里拿不到 SettingsStore（AppError 由 `?` 从任意错误转换而来，没有 state），
+        // 所以不能走 i18n 词典。写成中英双语前缀，英文部署下也不会突然冒出中文。
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Html(format!(
-                "<div class=\"toast err\">服务端错误：{}</div>",
+                "<div class=\"toast err\">服务端错误 / Server error: {}</div>",
                 self.0
             )),
         )
@@ -476,8 +480,25 @@ pub struct LoginForm {
 
 pub async fn login_submit(
     State(state): State<AppState>,
+    // 需要 main.rs 用 into_make_service_with_connect_info 起服务；
+    // 全项目只有这一个服务入口，拿不到 IP 时 axum 会明确报错而不是静默降级。
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     Form(form): Form<LoginForm>,
 ) -> Response {
+    let t = Tr::from(state.settings.lang()).with_site(state.settings.str("site_title"));
+    let throttle_key = format!("ip:{}", peer.ip());
+    if !state.login_throttle.allow(&throttle_key) {
+        tracing::warn!(key = %throttle_key, "登录被防爆破拦截");
+        return LoginTemplate {
+            t: t.clone(),
+            error: t.tr("login.throttled").into(),
+            next: sanitize_next(form.next.as_deref()),
+        }
+        .render()
+        .map(|h| Html(h).into_response())
+        .unwrap_or_else(|_| StatusCode::TOO_MANY_REQUESTS.into_response())
+        .into_response();
+    }
     let next = sanitize_next(form.next.as_deref());
     let user = match state.store.user(&form.username).await {
         Ok(u) => u,
@@ -487,9 +508,10 @@ pub async fn login_submit(
         }
     };
     let Some(user) = user else {
+        state.login_throttle.record_failure(&throttle_key);
         return LoginTemplate {
-            t: Tr::from(state.settings.lang()).with_site(state.settings.str("site_title")),
-            error: Tr::from(state.settings.lang()).with_site(state.settings.str("site_title")).tr("login.bad_credentials").into(),
+            t: t.clone(),
+            error: t.tr("login.bad_credentials").into(),
             next,
         }
         .render()
@@ -498,9 +520,10 @@ pub async fn login_submit(
         .into_response();
     };
     if !auth::verify_password(&user.password_hash, &form.password) {
+        state.login_throttle.record_failure(&throttle_key);
         return LoginTemplate {
-            t: Tr::from(state.settings.lang()).with_site(state.settings.str("site_title")),
-            error: Tr::from(state.settings.lang()).with_site(state.settings.str("site_title")).tr("login.bad_credentials").into(),
+            t: t.clone(),
+            error: t.tr("login.bad_credentials").into(),
             next,
         }
         .render()
@@ -518,6 +541,7 @@ pub async fn login_submit(
     let Ok(token) = auth::create_token(&state.cfg, idle_secs, &user.username, &user.role) else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
+    state.login_throttle.record_success(&throttle_key);
     state.store.audit(&user.username, "auth.login", "-", "登录成功");
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -806,19 +830,49 @@ pub async fn analysis_export(
         fmt_compact(from_ms),
         fmt_compact(to_ms)
     );
-    let dir = desktop_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-    let path = dir.join(&file_name);
-    match std::fs::write(&path, csv) {
-        Ok(()) => {
-            let path_str = path.to_string_lossy().to_string();
-            let msg = t.trf("analysis.export_done", &[("path", path_str.clone())]);
-            json_path(&msg, &path_str)
-        }
+    // 直接以附件流回浏览器。以前是写到**服务器**桌面再返回路径，只有坐在服务器
+    // 前面的人拿得到文件；远程访问时用户点导出等于什么也没发生。
+    csv_response(&file_name, csv)
+}
+
+/// 以 `text/csv` 附件形式返回，文件名同时给出 ASCII 回退与 RFC 5987 编码，
+/// 这样 SN 里带中文/空格时各浏览器都能得到正确名字。
+fn csv_response(file_name: &str, body: String) -> Response {
+    let ascii_name: String = file_name
+        .chars()
+        .map(|c| if c.is_ascii_graphic() && c != '"' { c } else { '_' })
+        .collect();
+    let encoded = percent_encode(file_name);
+    let disposition = format!(
+        "attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded}"
+    );
+    match Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/csv; charset=utf-8")
+        .header(header::CONTENT_DISPOSITION, disposition)
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(axum::body::Body::from(body))
+    {
+        Ok(r) => r,
         Err(e) => {
-            let msg = t.trf("analysis.export_fail", &[("msg", e.to_string())]);
-            json_message(false, &msg)
+            tracing::error!(error = %e, "构造 CSV 响应失败");
+            (StatusCode::INTERNAL_SERVER_ERROR, "export failed").into_response()
         }
     }
+}
+
+/// RFC 3986 百分号编码（只保留 unreserved 字符），用于 `filename*=UTF-8''`。
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 /// 本地时间 `YYYY-MM-DD HH:MM:SS`。
@@ -866,35 +920,10 @@ fn csv_field(v: &str) -> String {
     }
 }
 
-/// 桌面目录：优先 `%USERPROFILE%\Desktop`，其次 `%HOMEDRIVE%%HOMEPATH%\Desktop`，再退到家目录。
-fn desktop_dir() -> Option<std::path::PathBuf> {
-    if let Ok(profile) = std::env::var("USERPROFILE") {
-        let d = std::path::Path::new(&profile).join("Desktop");
-        if d.is_dir() {
-            return Some(d);
-        }
-    }
-    if let (Ok(hd), Ok(hp)) = (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH")) {
-        let d = std::path::Path::new(&hd).join(&hp).join("Desktop");
-        if d.is_dir() {
-            return Some(d);
-        }
-    }
-    std::env::var("HOME").ok().map(std::path::PathBuf::from)
-}
-
 fn json_message(ok: bool, message: &str) -> Response {
     (
         [(header::CONTENT_TYPE, "application/json")],
         axum::Json(serde_json::json!({ "ok": ok, "message": message })),
-    )
-        .into_response()
-}
-
-fn json_path(message: &str, path: &str) -> Response {
-    (
-        [(header::CONTENT_TYPE, "application/json")],
-        axum::Json(serde_json::json!({ "ok": true, "message": message, "path": path })),
     )
         .into_response()
 }
@@ -1089,8 +1118,8 @@ pub async fn device_panel(
     if !can_see_device(&state, &user, &sn).await {
         return Ok((StatusCode::NOT_FOUND, Html(format!("<div class='empty-hint'>{}</div>", t.tr("cmd.err_device")))).into_response());
     }
-    let rows = state.store.devices().await.unwrap_or_default();
-    let Some(row) = rows.into_iter().find(|r| r.sn == sn) else {
+    let rows = state.store.device(&sn).await.unwrap_or_default();
+    let Some(row) = rows else {
         return Ok((StatusCode::NOT_FOUND, Html(format!("<div class='empty-hint'>{}</div>", t.tr("cmd.err_device")))).into_response());
     };
     let t = Tr::from(state.settings.lang()).with_site(state.settings.str("site_title"));
@@ -1112,11 +1141,10 @@ pub async fn device_panel(
 
     let jobs = state
         .store
-        .jobs(50)
+        .jobs_for_sn(&sn, 50)
         .await
         .unwrap_or_default()
         .into_iter()
-        .filter(|j| j.sn == sn)
         .map(|j| job_view(&t, &j, state.ota.progress(&j.id)))
         .collect();
 
@@ -2169,7 +2197,7 @@ pub async fn user_parent(
         return toast_err(t.tr("cmd.err_self_parent"));
     }
     if !users.iter().any(|u| u.username == parent) {
-        return toast_err("上级用户不存在");
+        return toast_err(t.tr("cmd.err_parent_missing"));
     }
     if tree::subtree_usernames(&users, &form.username).contains(&parent) {
         return toast_err(t.tr("cmd.err_subtree"));
@@ -2359,18 +2387,18 @@ async fn load_forest(state: &AppState, user: &AuthUser) -> Vec<UserNode> {
 }
 
 /// 设备级越权校验：非管理员只能看自己子树的设备。
+/// 走设备点查而不是拉全表——这个函数在面板轮询等 9 个入口上都会被调用。
 async fn can_see_device(state: &AppState, user: &AuthUser, sn: &str) -> bool {
     if user.is_admin() {
         return true;
     }
-    let users = state.store.users().await.unwrap_or_default();
-    let devices = state.store.devices().await.unwrap_or_default();
-    let Some(d) = devices.iter().find(|d| d.sn == sn) else {
+    let Some(d) = state.store.device(sn).await.ok().flatten() else {
         return false;
     };
     if d.owner.is_empty() {
         return false;
     }
+    let users = state.store.users().await.unwrap_or_default();
     tree::subtree_usernames(&users, &user.username).contains(&d.owner)
 }
 
@@ -2464,8 +2492,7 @@ pub async fn device_live(
     }
     let live = state.registry.get(&sn).await;
     let latest = state.store.latest(&sn).await.ok().flatten();
-    let rows = state.store.devices().await.unwrap_or_default();
-    let row = rows.into_iter().find(|r| r.sn == sn).unwrap_or_default();
+    let row = state.store.device(&sn).await.ok().flatten().unwrap_or_default();
     DeviceLive {
         t: Tr::from(state.settings.lang()).with_site(state.settings.str("site_title")),
         i18n_js: i18n::js_dict(&state.settings.lang()),
@@ -2506,7 +2533,7 @@ pub async fn device_live(
         ),
         uptime: live
             .as_ref()
-            .map(|l| format!("{} 分钟", l.uptime_secs() / 60))
+            .map(|l| format!("{} {}", l.uptime_secs() / 60, t.tr("common.minutes")))
             .unwrap_or_else(|| "—".into()),
         remote: live
             .as_ref()
@@ -2560,9 +2587,8 @@ pub async fn device_assign(
             return toast_err(t.tr("cmd.err_owner_missing"));
         }
     }
-    // 设备不存在时 UPDATE 会影响 0 行，但界面照样提示"已更新"——先查一遍
-    let devices = state.store.devices().await.unwrap_or_default();
-    if !devices.iter().any(|d| d.sn == sn) {
+    // 设备不存在时 UPDATE 会影响 0 行，但界面照样提示"已更新"——先点查一遍
+    if state.store.device(&sn).await.ok().flatten().is_none() {
         return toast_err(t.tr("cmd.err_device"));
     }
     state.store.assign_device(&sn, &owner, &group);

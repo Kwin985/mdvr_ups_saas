@@ -37,7 +37,7 @@
   <button class="btn ghost" type="submit" name="days" value="7" onclick="this.form.from.value='';this.form.to.value=''">{{ t.tr("analysis.last7") }}</button>
   <button class="btn ghost" type="submit" name="days" value="30" onclick="this.form.from.value='';this.form.to.value=''">{{ t.tr("analysis.last30") }}</button>
   <button class="btn primary" type="submit">{{ t.tr("analysis.query") }}</button>
-  <button class="btn ghost" type="button" onclick="exportAnalysis(this)" data-exporting="{{ t.tr("analysis.exporting") }}">{{ t.tr("analysis.export") }}</button>
+  <button class="btn ghost" type="button" onclick="exportAnalysis(this)" data-exporting="{{ t.tr("analysis.exporting") }}" data-done="{{ t.tr("analysis.export_done") }}" data-fail="{{ t.tr("analysis.export_fail") }}">{{ t.tr("analysis.export") }}</button>
   <span id="exportStatus" class="export-status"></span>
 </form>
 
@@ -104,23 +104,45 @@ function exportAnalysis(btn) {
   params.set('to', qs.get('to') || '');
   params.set('days', qs.get('days') || '7');
   var status = document.getElementById('exportStatus');
+  var doneTpl = btn.dataset.done || 'Downloaded';
+  var failTpl = btn.dataset.fail || 'Export failed';
   status.textContent = btn.dataset.exporting || 'Exporting…';
   status.className = 'export-status';
   btn.disabled = true;
+  // 服务端直接回 CSV 附件，这里接住 blob 再触发下载：
+  // 以前是服务端写自己的桌面并回 JSON 路径，远程访问的用户根本拿不到文件。
   fetch('/analysis/export?' + params.toString(), { method: 'GET', credentials: 'same-origin' })
-    .then(function (r) { return r.json(); })
-    .then(function (d) {
-      if (d && d.ok) {
-        status.textContent = d.message;
-        status.className = 'export-status ok';
-      } else {
-        status.textContent = (d && d.message) || 'Export failed';
-        status.className = 'export-status err';
+    .then(function (r) {
+      var ct = r.headers.get('Content-Type') || '';
+      if (!r.ok || ct.indexOf('text/csv') !== 0) {
+        return r.json().then(function (d) {
+          throw new Error((d && d.message) || failTpl);
+        });
       }
+      var cd = r.headers.get('Content-Disposition') || '';
+      var m = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+      var name = m ? decodeURIComponent(m[1]) : 'export.csv';
+      return r.blob().then(function (b) { return { blob: b, name: name }; });
+    })
+    .then(function (got) {
+      var url = URL.createObjectURL(got.blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = got.name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+      // 词典里的占位符是双花括号 name（与服务端 trf 同一套约定）。
+      // 注意不能在模板里写出字面双花括号——Askama 会把它当模板变量而编译失败，
+      // 所以用字符类拼正则。
+      var nameRe = new RegExp("[{][{]name[}][}]", "g");
+      status.textContent = doneTpl.replace(nameRe, got.name);
+      status.className = 'export-status ok';
       btn.disabled = false;
     })
     .catch(function (e) {
-      status.textContent = 'Export failed: ' + e;
+      status.textContent = String(e.message || e);
       status.className = 'export-status err';
       btn.disabled = false;
     });

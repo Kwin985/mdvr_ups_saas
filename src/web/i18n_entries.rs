@@ -68,6 +68,7 @@ pub const ZH_ENTRIES: &[(&str, &str)] = &[
     ("login.password", "密码"),
     ("login.submit", "登录"),
     ("login.bad_credentials", "用户名或密码错误"),
+    ("login.throttled", "失败次数过多，已临时锁定，请稍后再试"),
     // ---- 实时监控 ----
     ("monitor.title", "实时监控"),
     ("monitor.heading", "实时监控"),
@@ -113,7 +114,7 @@ pub const ZH_ENTRIES: &[(&str, &str)] = &[
     ("analysis.evt_full", "充满"),
     ("analysis.export", "导出"),
     ("analysis.exporting", "正在导出…"),
-    ("analysis.export_done", "已导出到桌面：{{path}}"),
+    ("analysis.export_done", "已下载 {{name}}"),
     ("analysis.export_empty", "所选时间范围内没有数据，无法导出。"),
     ("analysis.export_fail", "导出失败：{{msg}}"),
 
@@ -390,6 +391,7 @@ pub const ZH_ENTRIES: &[(&str, &str)] = &[
     ("cmd.err_user_exists", "用户名已存在，重置密码请用行内的「重置密码」"),
     ("cmd.err_user_missing", "用户不存在"),
     ("cmd.err_parent_self", "上级不能是用户自己"),
+    ("cmd.err_parent_missing", "上级用户不存在"),
     ("cmd.err_root_delete", "不能删除根管理员账号"),
     ("cmd.err_last_admin", "不能删除最后一个管理员账号"),
     ("cmd.err_pwd_len", "密码至少 6 位"),
@@ -626,6 +628,7 @@ pub const EN_ENTRIES: &[(&str, &str)] = &[
     ("login.password", "Password"),
     ("login.submit", "Sign in"),
     ("login.bad_credentials", "Wrong username or password"),
+    ("login.throttled", "Too many failed attempts. This login is temporarily locked; try again later"),
     // ---- monitor ----
     ("monitor.title", "Live Monitor"),
     ("monitor.heading", "Live Monitor"),
@@ -671,7 +674,7 @@ pub const EN_ENTRIES: &[(&str, &str)] = &[
     ("analysis.evt_full", "Fully charged"),
     ("analysis.export", "Export"),
     ("analysis.exporting", "Exporting…"),
-    ("analysis.export_done", "Exported to Desktop: {{path}}"),
+    ("analysis.export_done", "Downloaded {{name}}"),
     ("analysis.export_empty", "No data in the selected range; nothing to export."),
     ("analysis.export_fail", "Export failed: {{msg}}"),
     // ---- panel / live ----
@@ -950,6 +953,7 @@ pub const EN_ENTRIES: &[(&str, &str)] = &[
     ),
     ("cmd.err_user_missing", "User does not exist"),
     ("cmd.err_parent_self", "A user cannot be their own parent"),
+    ("cmd.err_parent_missing", "Parent user does not exist"),
     ("cmd.err_root_delete", "The root admin account cannot be deleted"),
     ("cmd.err_last_admin", "Cannot delete the last remaining admin account"),
     ("cmd.err_pwd_len", "Password must be at least 6 characters"),

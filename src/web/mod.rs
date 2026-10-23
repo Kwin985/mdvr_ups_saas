@@ -43,6 +43,7 @@ pub fn build_state(
         metrics,
         rbac,
         settings,
+        login_throttle: Arc::new(auth::LoginThrottle::default()),
     }
 }
 
@@ -60,7 +61,13 @@ pub fn router(state: AppState) -> Router {
         .route("/devices/{sn}/history", get(handlers::history_partial))
         .route("/devices/{sn}/command", post(handlers::device_command))
         .route("/ota", get(handlers::ota_page))
-        .route("/ota/upload", post(handlers::ota_upload))
+        // 固件体积远大于 64KiB 的演示包（真实 MDVR 固件常有几 MB），
+        // axum 默认 2MB 上限会把上传直接掐断，这里显式放宽到 32MiB。
+        .route(
+            "/ota/upload",
+            post(handlers::ota_upload)
+                .layer(axum::extract::DefaultBodyLimit::max(32 * 1024 * 1024)),
+        )
         .route("/ota/start", post(handlers::ota_start))
         .route("/ota/{sn}/start", post(handlers::ota_start))
         .route("/ota/jobs/{id}/progress", get(handlers::ota_progress))

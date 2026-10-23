@@ -211,6 +211,9 @@ pub struct HistoryQuery {
 
 enum Query {
     Devices,
+    /// 单台设备。列表页为了找一台而拉全表时，代价随设备数线性增长，
+    /// 而 `/devices/{sn}/live` 是被前端轮询的，必须走点查。
+    Device(String),
     History(HistoryQuery),
     Buckets {
         sn: String,
@@ -228,12 +231,20 @@ enum Query {
     Firmware,
     FirmwareById(String),
     Jobs(i64),
+    /// 指定设备最近的升级任务。`Jobs(limit)` 是全局最近 N 条，
+    /// 拿它按 SN 过滤会在设备变多后漏掉本设备的任务。
+    JobsForSn {
+        sn: String,
+        limit: i64,
+    },
     Job(String),
     SettingsAll,
 }
 
+#[derive(Debug)]
 enum StoreResult {
     Devices(Vec<DeviceRow>),
+    OptionalDevice(Option<DeviceRow>),
     Samples(Vec<SampleRow>),
     Buckets(Vec<Bucket>),
     OptionalSample(Option<SampleRow>),
@@ -531,6 +542,15 @@ impl Store {
         }
     }
 
+    /// 单台设备点查。列表页为了找一台设备而拉全表，代价随设备数线性增长，
+    /// 而设备面板的实时区是轮询的，必须走点查。
+    pub async fn device(&self, sn: &str) -> Result<Option<DeviceRow>> {
+        match self.ask(Query::Device(sn.to_string())).await? {
+            StoreResult::OptionalDevice(v) => Ok(v),
+            _ => Err(anyhow!("意外的查询结果")),
+        }
+    }
+
     pub async fn latest_all(&self) -> Result<Vec<LatestRow>> {
         match self.ask(Query::LatestAll).await? {
             StoreResult::LatestAll(v) => Ok(v),
@@ -622,6 +642,20 @@ impl Store {
 
     pub async fn jobs(&self, limit: i64) -> Result<Vec<JobRow>> {
         match self.ask(Query::Jobs(limit)).await? {
+            StoreResult::Jobs(v) => Ok(v),
+            _ => Err(anyhow!("意外的查询结果")),
+        }
+    }
+
+    /// 指定设备最近的升级任务（`jobs()` 是全局最近 N 条，按 SN 过滤会漏）。
+    pub async fn jobs_for_sn(&self, sn: &str, limit: i64) -> Result<Vec<JobRow>> {
+        match self
+            .ask(Query::JobsForSn {
+                sn: sn.to_string(),
+                limit,
+            })
+            .await?
+        {
             StoreResult::Jobs(v) => Ok(v),
             _ => Err(anyhow!("意外的查询结果")),
         }
@@ -1596,25 +1630,19 @@ impl WriterState {
                      FROM devices ORDER BY sn",
                 )?;
                 let rows = stmt
-                    .query_map([], |row| {
-                        Ok(DeviceRow {
-                            sn: row.get(0)?,
-                            mdvr_id: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                            address: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
-                            baudrate: row.get::<_, Option<i64>>(3)?.unwrap_or(9600),
-                            report_interval: row.get::<_, Option<i64>>(4)?.unwrap_or(30),
-                            firmware_version: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
-                            last_seen_ms: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
-                            online: row.get::<_, Option<bool>>(7)?.unwrap_or(false),
-                            config_json: row.get::<_, Option<String>>(8)?.unwrap_or_default(),
-                            owner: row.get::<_, Option<String>>(9)?.unwrap_or_default(),
-                            group_name: row
-                                .get::<_, Option<String>>(10)?
-                                .unwrap_or_else(|| "默认分组".into()),
-                        })
-                    })?
+                    .query_map([], map_device)?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 Ok(StoreResult::Devices(rows))
+            }
+            Query::Device(sn) => {
+                let mut stmt = self.conn.prepare(
+                    "SELECT sn, mdvr_id, address, baudrate, report_interval, firmware_version,
+                            last_seen_ms, online, config_json,
+                            COALESCE(owner, ''), COALESCE(group_name, '默认分组')
+                     FROM devices WHERE sn = ? LIMIT 1",
+                )?;
+                let mut rows = stmt.query_map(params![sn], map_device)?;
+                Ok(StoreResult::OptionalDevice(rows.next().transpose()?))
             }
             Query::LatestAll => {
                 // 每台设备取最新一行：QUALIFY + row_number 在 DuckDB 里比自连接更快
@@ -1787,6 +1815,17 @@ impl WriterState {
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 Ok(StoreResult::Jobs(rows))
             }
+            Query::JobsForSn { sn, limit } => {
+                let mut stmt = self.conn.prepare(
+                    "SELECT id, sn, firmware_id, state, total_packets, sent_packets, retries,
+                            started_at_ms, finished_at_ms, message, actor
+                     FROM ota_jobs WHERE sn = ? ORDER BY started_at_ms DESC LIMIT ?",
+                )?;
+                let rows = stmt
+                    .query_map(params![sn, limit], map_job)?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok(StoreResult::Jobs(rows))
+            }
             Query::Job(id) => {
                 let mut stmt = self.conn.prepare(
                     "SELECT id, sn, firmware_id, state, total_packets, sent_packets, retries,
@@ -1798,6 +1837,25 @@ impl WriterState {
             }
         }
     }
+}
+
+/// 设备行映射。`Query::Devices` 与 `Query::Device` 共用同一份列顺序。
+fn map_device(row: &duckdb::Row<'_>) -> duckdb::Result<DeviceRow> {
+    Ok(DeviceRow {
+        sn: row.get(0)?,
+        mdvr_id: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+        address: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+        baudrate: row.get::<_, Option<i64>>(3)?.unwrap_or(9600),
+        report_interval: row.get::<_, Option<i64>>(4)?.unwrap_or(30),
+        firmware_version: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+        last_seen_ms: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+        online: row.get::<_, Option<bool>>(7)?.unwrap_or(false),
+        config_json: row.get::<_, Option<String>>(8)?.unwrap_or_default(),
+        owner: row.get::<_, Option<String>>(9)?.unwrap_or_default(),
+        group_name: row
+            .get::<_, Option<String>>(10)?
+            .unwrap_or_else(|| "默认分组".into()),
+    })
 }
 
 fn map_sample(row: &duckdb::Row<'_>) -> duckdb::Result<SampleRow> {
@@ -2008,6 +2066,71 @@ mod tests {
             report_interval: 30,
             firmware_version: String::new(),
             config_json: "{}".into(),
+        }
+    }
+
+    /// 点查防回归：`Query::Device` / `Query::JobsForSn` 必须只返回目标 SN 的行。
+    /// 面板轮询走的是这两条路径，以前是拉全表再过滤，设备一多就成倍放大。
+    #[test]
+    fn device_and_jobs_for_sn_are_point_lookups() {
+        let mut state = test_state();
+        state
+            .apply_device_batch(
+                &[meta("UPS-1", "MDVR-A"), meta("UPS-2", "MDVR-B")],
+                &[("UPS-1".to_string(), true, 1_000)],
+            )
+            .unwrap();
+        // 直接写两行任务，时间戳一老一新，用来验证排序方向
+        for (id, sn, started) in [
+            ("j-old", "UPS-1", 1_000i64),
+            ("j-new", "UPS-1", 9_000),
+            ("j-other", "UPS-2", 5_000),
+        ] {
+            state
+                .conn
+                .execute(
+                    "INSERT INTO ota_jobs (id, sn, firmware_id, state, total_packets,
+                                            sent_packets, retries, started_at_ms, message, actor)
+                     VALUES (?,?,'fw','running',10,0,0,?,'','tester')",
+                    params![id, sn, started],
+                )
+                .unwrap();
+        }
+
+        // 单设备点查：命中与未命中都要正确
+        match state.try_query(Query::Device("UPS-2".into())).unwrap() {
+            StoreResult::OptionalDevice(Some(row)) => assert_eq!(row.sn, "UPS-2"),
+            other => panic!("意外的查询结果: {other:?}"),
+        }
+        match state.try_query(Query::Device("UPS-404".into())).unwrap() {
+            StoreResult::OptionalDevice(None) => {}
+            other => panic!("意外的查询结果: {other:?}"),
+        }
+
+        // 指定 SN 的任务：只含本设备的，且新的在前
+        match state
+            .try_query(Query::JobsForSn {
+                sn: "UPS-1".into(),
+                limit: 50,
+            })
+            .unwrap()
+        {
+            StoreResult::Jobs(rows) => {
+                let ids: Vec<&str> = rows.iter().map(|j| j.id.as_str()).collect();
+                assert_eq!(ids, vec!["j-new", "j-old"], "应按 started_at_ms 倒序");
+            }
+            other => panic!("意外的查询结果: {other:?}"),
+        }
+        // limit 生效
+        match state
+            .try_query(Query::JobsForSn {
+                sn: "UPS-1".into(),
+                limit: 1,
+            })
+            .unwrap()
+        {
+            StoreResult::Jobs(rows) => assert_eq!(rows.len(), 1),
+            other => panic!("意外的查询结果: {other:?}"),
         }
     }
 

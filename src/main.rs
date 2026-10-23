@@ -157,7 +157,12 @@ async fn main() -> Result<()> {
         .with_context(|| format!("绑定 Web 端口 {web_addr} 失败"))?;
     tracing::info!("Web 管理端: http://{web_addr}");
 
-    axum::serve(listener, app)
+    axum::serve(
+        listener,
+        // into_make_service_with_connect_info：让登录处理器能拿到来源 IP（防爆破用）。
+        // 拿不到时处理器用 Option<ConnectInfo> 兜底退化成按用户名限流。
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
