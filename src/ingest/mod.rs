@@ -185,12 +185,15 @@ impl Ingest {
 
         // 绑定 SN（占位 → 可能在首个 'a' 帧后被替换为真实 SN）
         let mut sn = initial_sn;
+        // 本连接上最后一次看到的设备地址。设备被 `d` 命令改过地址后，上行的
+        // `a` 帧会带着新地址；缓存它可避免每帧都写库，又能及时回写 devices.address。
+        let mut dev_addr: Option<u8> = None;
         let mut parser = FrameParser::new();
         let mut buf = [0u8; 4096];
         let idle = Duration::from_secs(self.settings.u64("idle_timeout_secs", 180).max(30));
 
         if !hs.leftover.is_empty() {
-            self.handle_bytes(&mut parser, &hs.leftover, &mut sn, conn_id)
+            self.handle_bytes(&mut parser, &hs.leftover, &mut sn, &mut dev_addr, conn_id)
                 .await;
         }
 
@@ -210,7 +213,7 @@ impl Ingest {
             self.metrics
                 .bytes_in
                 .fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
-            self.handle_bytes(&mut parser, &buf[..n], &mut sn, conn_id)
+            self.handle_bytes(&mut parser, &buf[..n], &mut sn, &mut dev_addr, conn_id)
                 .await;
             if let Some(h) = self.registry.get(&sn).await {
                 h.touch();
@@ -233,6 +236,7 @@ impl Ingest {
         parser: &mut FrameParser,
         data: &[u8],
         sn: &mut String,
+        dev_addr: &mut Option<u8>,
         conn_id: Uuid,
     ) {
         for event in parser.feed(data) {
@@ -241,7 +245,7 @@ impl Ingest {
                     self.metrics
                         .frames_total
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    self.handle_frame(frame, sn, conn_id).await;
+                    self.handle_frame(frame, sn, dev_addr, conn_id).await;
                 }
                 ParseEvent::Invalid(err) => {
                     self.metrics
@@ -253,7 +257,26 @@ impl Ingest {
         }
     }
 
-    async fn handle_frame(&self, frame: Frame, sn: &mut String, conn_id: Uuid) {
+    async fn handle_frame(
+        &self,
+        frame: Frame,
+        sn: &mut String,
+        dev_addr: &mut Option<u8>,
+        conn_id: Uuid,
+    ) {
+        // 设备地址以它**上行帧的地址字节**为准：`d` 命令改址后，设备后续的
+        // `a`/`V` 帧都会带新地址。这里只认状态帧（周期上报、最权威），
+        // 不去认设置类应答——应答是设备用**旧地址**回的，会把刚设好的新地址冲掉。
+        if frame.command == cmd::STATUS_A && *dev_addr != Some(frame.address) {
+            tracing::info!(
+                sn = %sn,
+                from = ?dev_addr,
+                to = frame.address,
+                "设备串口地址已变更，回写 devices.address"
+            );
+            self.store.update_address(sn, frame.address as i64);
+            *dev_addr = Some(frame.address);
+        }
         match frame.command {
             cmd::STATUS_A => match StatusA::parse(&frame.payload) {
                 Ok(st) => {

@@ -162,6 +162,16 @@ impl OtaManager {
         if handle.is_busy() {
             return Err(OtaError::Busy);
         }
+        // 设备可能被 `d` 命令改过串口地址；S/D/F 三个阶段帧都要用当前地址，
+        // 否则设备一律收不到，升级会卡在「等待设备应答 S 命令」。
+        let address = self
+            .store
+            .device(sn)
+            .await
+            .ok()
+            .flatten()
+            .map(|d| d.address.clamp(0, 247) as u8)
+            .unwrap_or(codec::DEFAULT_ADDRESS);
         let fw = self
             .store
             .firmware_by_id(firmware_id)
@@ -230,7 +240,7 @@ impl OtaManager {
         let this = self.clone();
         let sn_owned = sn.to_string();
         tokio::spawn(async move {
-            this.run(job_id, sn_owned, fw, bytes, packets, ack_rx, cancel)
+            this.run(job_id, sn_owned, fw, bytes, packets, address, ack_rx, cancel)
                 .await;
         });
 
@@ -245,11 +255,12 @@ impl OtaManager {
         fw: FirmwareRow,
         bytes: Vec<u8>,
         packets: u16,
+        address: u8,
         mut ack_rx: mpsc::Receiver<u8>,
         cancel: Arc<AtomicBool>,
     ) {
         let result = self
-            .flow(&job_id, &sn, &bytes, packets, &mut ack_rx, &cancel)
+            .flow(&job_id, &sn, &bytes, packets, address, &mut ack_rx, &cancel)
             .await;
 
         let (state, message, success) = match &result {
@@ -300,19 +311,21 @@ impl OtaManager {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn flow(
         &self,
         job_id: &str,
         sn: &str,
         bytes: &[u8],
         packets: u16,
+        address: u8,
         ack_rx: &mut mpsc::Receiver<u8>,
         cancel: &AtomicBool,
     ) -> Result<(), OtaError> {
         let max_restarts = self.settings.u32("ota_max_restarts", self.cfg.ota_max_restarts);
         let mut restarts = 0u32;
         loop {
-            self.begin_phase(job_id, sn, bytes.len() as u16, packets, ack_rx, cancel)
+            self.begin_phase(job_id, sn, bytes.len() as u16, packets, address, ack_rx, cancel)
                 .await?;
 
             let mut restart = false;
@@ -323,7 +336,9 @@ impl OtaManager {
                 let start = frame_id as usize * codec::OTA_CHUNK_SIZE;
                 let end = (start + codec::OTA_CHUNK_SIZE).min(bytes.len());
                 match self
-                    .send_packet(job_id, sn, frame_id, &bytes[start..end], packets, ack_rx, cancel)
+                    .send_packet(
+                        job_id, sn, frame_id, &bytes[start..end], packets, address, ack_rx, cancel,
+                    )
                     .await
                 {
                     Ok(()) => {}
@@ -353,7 +368,7 @@ impl OtaManager {
         }
 
         // 结束帧：0x30 写入成功；0x31 校验错重发；0x32 写 Flash 失败需整轮重来
-        let end_frame = Frame::new(codec::DEFAULT_ADDRESS, cmd::OTA_END, codec::ota_end_payload());
+        let end_frame = Frame::new(address, cmd::OTA_END, codec::ota_end_payload());
         let mut confirmed = false;
         for _ in 0..3 {
             drain(ack_rx);
@@ -383,17 +398,19 @@ impl OtaManager {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn begin_phase(
         &self,
         job_id: &str,
         sn: &str,
         size: u16,
         packets: u16,
+        address: u8,
         ack_rx: &mut mpsc::Receiver<u8>,
         cancel: &AtomicBool,
     ) -> Result<(), OtaError> {
         let payload = codec::ota_begin_payload(size, packets);
-        let frame = Frame::new(codec::DEFAULT_ADDRESS, cmd::OTA_BEGIN, payload);
+        let frame = Frame::new(address, cmd::OTA_BEGIN, payload);
         let deadline = Instant::now() + Duration::from_millis(self.settings.u64("ota_begin_window_ms", self.cfg.ota_begin_window_ms));
         let interval = Duration::from_millis(self.settings.u64("ota_begin_interval_ms", self.cfg.ota_begin_interval_ms).max(10));
         self.patch_progress(job_id, |p| {
@@ -427,11 +444,12 @@ impl OtaManager {
         frame_id: u16,
         chunk: &[u8],
         total: u16,
+        address: u8,
         ack_rx: &mut mpsc::Receiver<u8>,
         cancel: &AtomicBool,
     ) -> Result<(), OtaError> {
         let payload = codec::ota_data_payload(frame_id, chunk);
-        let frame = Frame::new(codec::DEFAULT_ADDRESS, cmd::OTA_DATA, payload);
+        let frame = Frame::new(address, cmd::OTA_DATA, payload);
         let mut attempt = 0u32;
         loop {
             if cancel.load(Ordering::SeqCst) {

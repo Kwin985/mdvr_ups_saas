@@ -272,6 +272,10 @@ enum Cmd {
         sn: String,
         version: String,
     },
+    UpdateAddress {
+        sn: String,
+        address: i64,
+    },
     CreateJob(NewJob),
     UpdateJob {
         id: String,
@@ -415,6 +419,15 @@ impl Store {
         let _ = self.tx.send(Cmd::UpdateFirmware {
             sn: sn.to_string(),
             version: version.to_string(),
+        });
+    }
+
+    /// 记住设备当前的串口地址。设备执行 `d`（设置地址）后会用**新地址**收发，
+    /// 平台若不跟着改，后续所有命令仍发往旧地址、设备一律收不到。
+    pub fn update_address(&self, sn: &str, address: i64) {
+        let _ = self.tx.send(Cmd::UpdateAddress {
+            sn: sn.to_string(),
+            address,
         });
     }
 
@@ -951,6 +964,14 @@ impl WriterState {
                     tracing::error!(error = %e, "更新固件版本失败");
                 }
             }
+            Cmd::UpdateAddress { sn, address } => {
+                if let Err(e) = self.conn.execute(
+                    "UPDATE devices SET address = ?, updated_at_ms = ? WHERE sn = ?",
+                    params![address, Utc::now().timestamp_millis(), sn],
+                ) {
+                    tracing::error!(error = %e, sn = %sn, "更新设备地址失败");
+                }
+            }
             Cmd::MigrateDeviceSn { old_sn, new_sn } => {
                 if let Err(e) = self.migrate_device_sn(&old_sn, &new_sn) {
                     tracing::error!(
@@ -1207,12 +1228,14 @@ impl WriterState {
             }
             app.flush()?;
         }
+        // 注意：这里**只更新** mdvr_id。address / baudrate / report_interval 是
+        // 设备侧配置（由 `d`/`b`/`f` 命令设定，或由上行帧学到的地址），入库时
+        // 传的是平台默认值；若放进 UPDATE，每次设备重连都会把用户设过的地址、
+        // 波特率、上报间隔重置回默认（改址后重连又变回 0，命令就再也发不到了）。
+        // 新设备的默认值仍由下面的 INSERT 负责。
         self.conn.execute_batch(
             "UPDATE devices SET
                 mdvr_id = b.mdvr_id,
-                address = b.address,
-                baudrate = b.baudrate,
-                report_interval = b.report_interval,
                 updated_at_ms = b.ts
              FROM bulk_devices b WHERE devices.sn = b.sn;
 
@@ -2174,6 +2197,44 @@ mod tests {
         assert_eq!(rows[1].0, "UPS-2");
         assert_eq!(rows[1].1, "MDVR-B");
         assert!(rows[1].2);
+    }
+
+    /// 设备改过串口地址后，重连**不能**把地址冲回默认 0：ingest 每次接入都会以
+    /// `address=0` 走 upsert，若 upsert 覆盖 address，改址后设备就再也收不到命令
+    /// （查询版本、重启、OTA 全部失效）。这条是那次线上问题的直接回归。
+    #[test]
+    fn reconnect_preserves_learned_device_address() {
+        let mut state = test_state();
+        state
+            .apply_device_batch(&[meta("UPS-1", "MDVR-A")], &[])
+            .unwrap();
+
+        // 设址成功 / 上行帧学到的地址回写
+        state.handle(Cmd::UpdateAddress {
+            sn: "UPS-1".into(),
+            address: 7,
+        });
+
+        let addr: i64 = state
+            .conn
+            .query_row("SELECT address FROM devices WHERE sn = 'UPS-1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(addr, 7, "UpdateAddress 应写入 devices.address");
+
+        // 设备重连：ingest 仍以平台默认 address=0 走 upsert
+        state
+            .apply_device_batch(&[meta("UPS-1", "MDVR-A")], &[])
+            .unwrap();
+
+        let addr: i64 = state
+            .conn
+            .query_row("SELECT address FROM devices WHERE sn = 'UPS-1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(addr, 7, "重连不能覆盖已学到的设备地址");
     }
 
     /// 事务中途失败必须整批回滚，不能留下半截接入记录。

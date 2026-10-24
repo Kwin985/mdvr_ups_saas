@@ -1457,7 +1457,18 @@ pub async fn device_command(
         return toast_err(Tr::from(state.settings.lang()).with_site(state.settings.str("site_title")).tr("cmd.err_device"));
     }
     let t = Tr::from(state.settings.lang()).with_site(state.settings.str("site_title"));
-    let frame = match build_command(&t, &form) {
+    // 下发命令必须用设备**当前**的串口地址：设备执行过 `d`（设置地址）后会改用
+    // 新地址收发，平台若仍按默认地址 0 发送，设备一律收不到（查询版本、重启、
+    // 设置类命令全部失效）。地址只来自库里的 devices.address。
+    let addr = state
+        .store
+        .device(&sn)
+        .await
+        .ok()
+        .flatten()
+        .map(|d| d.address.clamp(0, 247) as u8)
+        .unwrap_or(codec::DEFAULT_ADDRESS);
+    let frame = match build_command(&t, &form, addr) {
         Ok(f) => f,
         Err(e) => {
             return ToastTemplate {
@@ -1470,6 +1481,12 @@ pub async fn device_command(
             .into_response();
         }
     };
+    // 设置地址的载荷就是新地址，发送成功后要记住它，后续命令才会发往新地址。
+    let new_addr = if form.action == "set_address" {
+        frame.payload.first().copied()
+    } else {
+        None
+    };
     let label = crate::protocol::codec::command_name(frame.command).to_string();
     match state.registry.send(&sn, frame, false).await {
         Ok(()) => {
@@ -1479,6 +1496,9 @@ pub async fn device_command(
                 &sn,
                 &format!("{label} {}", form.value.clone().unwrap_or_default()),
             );
+            if let Some(a) = new_addr {
+                state.store.update_address(&sn, a as i64);
+            }
             ToastTemplate {
                 ok: true,
                 message: format!("{label}{}", t.tr("cmd.sent")),
@@ -1495,22 +1515,26 @@ pub async fn device_command(
     .into_response()
 }
 
-fn build_command(t: &Tr, form: &CommandForm) -> Result<Frame, String> {
+/// 组装下发命令。`addr` 是设备**当前**的串口地址——所有命令帧都必须带上它，
+/// 否则设备改过地址后（`d` 命令）就会因为地址不匹配而全部丢弃。
+fn build_command(t: &Tr, form: &CommandForm, addr: u8) -> Result<Frame, String> {
     let value = form.value.clone().unwrap_or_default();
     let frame = match form.action.as_str() {
         // 文档没有「查询状态」命令，状态由设备按推送频率主动上报；
         // 这里用「请求版本」代替查询，返回的 V 帧会刷新固件版本。
-        "query" | "version" => Frame::new(codec::DEFAULT_ADDRESS, cmd::QUERY_VERSION, Vec::new()),
-        "restart" => Frame::new(codec::DEFAULT_ADDRESS, cmd::RESTART, Vec::new()),
+        "query" | "version" => Frame::new(addr, cmd::QUERY_VERSION, Vec::new()),
+        "restart" => Frame::new(addr, cmd::RESTART, Vec::new()),
         "set_address" => {
-            let addr: u8 = value
+            // 注意：载荷里的 new_addr 是**目标**地址，帧头仍用当前地址 addr 发送，
+            // 设备收到后才会切换到新地址。这里变量名不能复用 addr。
+            let new_addr: u8 = value
                 .trim()
                 .parse()
                 .map_err(|_| t.tr("cmd.err_addr").to_string())?;
-            if addr > 247 {
+            if new_addr > 247 {
                 return Err(t.tr("cmd.err_addr").to_string());
             }
-            Frame::new(codec::DEFAULT_ADDRESS, cmd::SET_ADDRESS, vec![addr])
+            Frame::new(addr, cmd::SET_ADDRESS, vec![new_addr])
         }
         "set_baudrate" => {
             let idx: u8 = value
@@ -1520,7 +1544,7 @@ fn build_command(t: &Tr, form: &CommandForm) -> Result<Frame, String> {
             if idx > 9 {
                 return Err(t.tr("cmd.err_baud").to_string());
             }
-            Frame::new(codec::DEFAULT_ADDRESS, cmd::SET_BAUDRATE, codec::baud_para(idx).to_vec())
+            Frame::new(addr, cmd::SET_BAUDRATE, codec::baud_para(idx).to_vec())
         }
         "set_interval" => {
             let secs: u16 = value
@@ -1531,7 +1555,7 @@ fn build_command(t: &Tr, form: &CommandForm) -> Result<Frame, String> {
                 return Err(t.tr("cmd.err_interval").to_string());
             }
             Frame::new(
-                codec::DEFAULT_ADDRESS,
+                addr,
                 cmd::SET_REPORT_INTERVAL,
                 codec::interval_para(secs).to_vec(),
             )
@@ -1543,7 +1567,7 @@ fn build_command(t: &Tr, form: &CommandForm) -> Result<Frame, String> {
             }
             let mut payload = vec![0x20u8; codec::STATUS_A_SN_LEN];
             payload[..sn.len()].copy_from_slice(sn.as_bytes());
-            Frame::new(codec::DEFAULT_ADDRESS, cmd::SET_SN, payload)
+            Frame::new(addr, cmd::SET_SN, payload)
         }
         other => return Err(format!("{} {other}", t.tr("cmd.err_unknown"))),
     };
