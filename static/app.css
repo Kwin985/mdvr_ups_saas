@@ -510,6 +510,12 @@ tbody tr:hover td { background: rgba(79, 195, 247, 0.05); }
 }
 .flash, .toast.ok { color: #8ee39a; background: var(--ok-soft); border-color: rgba(76, 175, 80, 0.35); }
 .alert.err, .toast.err { color: #ff8a80; background: var(--bad-soft); border-color: rgba(244, 67, 54, 0.35); }
+/* 命令结果：第一行「已下发」，第二行是设备应答 / 超时 */
+.toast-line { line-height: 1.5; }
+.toast-detail {
+  margin-top: 4px; padding-top: 4px; font-size: 12px; opacity: 0.92;
+  border-top: 1px dashed currentColor; word-break: break-all;
+}
 .empty-hint, .empty-state {
   display: flex;
   flex-direction: column;
@@ -1034,6 +1040,12 @@ tbody tr:hover td { background: rgba(79, 195, 247, 0.05); }
   position: absolute; right: 10px; font-size: 11px; color: var(--muted); pointer-events: none;
 }
 .param-suffix input { padding-right: 26px; }
+/* 暂不开放的参数项：保留入口但置灰不可用 */
+.param-row.is-disabled { opacity: 0.45; }
+.param-row.is-disabled select, .param-row.is-disabled button { cursor: not-allowed; }
+.param-warn { color: var(--warn); margin: 2px 0 6px; }
+/* 命令下发后要等设备应答，这几秒里按钮置灰给个反馈 */
+.htmx-request { opacity: 0.55; }
 
 /* ===========================================================================
    空闲锁定遮罩：超过空闲窗口没有操作时盖住整页，阻止继续操作与轮询

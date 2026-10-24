@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use tokio::net::TcpListener;
 
+use mdvr_ups::command_bus::CommandBus;
 use mdvr_ups::config::Config;
 use mdvr_ups::ingest::Ingest;
 use mdvr_ups::ingest::registry::Registry;
@@ -104,6 +105,8 @@ async fn main() -> Result<()> {
 
     let registry = Arc::new(Registry::new());
     let metrics = Arc::new(Metrics::default());
+    // 命令应答总线：ingest 收到设备应答后投递给等待中的 web 请求
+    let commands = Arc::new(CommandBus::new());
     let ota = OtaManager::new(
         registry.clone(),
         store.clone(),
@@ -125,6 +128,7 @@ async fn main() -> Result<()> {
         ota: ota.clone(),
         metrics: metrics.clone(),
         settings: settings.clone(),
+        commands: commands.clone(),
     };
     tokio::spawn(ingest.serve(ingest_listener));
 
@@ -151,7 +155,9 @@ async fn main() -> Result<()> {
         metrics,
         rbac,
         settings.clone(),
-    );    let app = web::router(state);
+        commands,
+    );
+    let app = web::router(state);
     let listener = TcpListener::bind(web_addr)
         .await
         .with_context(|| format!("绑定 Web 端口 {web_addr} 失败"))?;

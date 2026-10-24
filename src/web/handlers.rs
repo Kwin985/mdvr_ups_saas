@@ -13,7 +13,7 @@ use crate::config::Config;
 use crate::ingest::registry::Registry;
 use crate::metrics::Metrics;
 use crate::ota::{JobProgress, OtaManager};
-use crate::protocol::{Frame, cmd, codec};
+use crate::protocol::{Frame, Version, ack, cmd, codec};
 use crate::settings::SettingsStore;
 use crate::storage::{FirmwareRow, JobRow, SampleRow, Store};
 
@@ -35,6 +35,8 @@ pub struct AppState {
     pub settings: Arc<SettingsStore>,
     /// 登录防爆破（进程内存，重启即重置）
     pub login_throttle: Arc<auth::LoginThrottle>,
+    /// 命令应答总线：下发命令后等待设备应答
+    pub commands: Arc<crate::command_bus::CommandBus>,
 }
 
 // ---------------------------------------------------------------------------
@@ -430,6 +432,32 @@ struct ForbiddenTemplate {
 struct ToastTemplate {
     ok: bool,
     message: String,
+}
+
+/// 设备命令的结果提示：第一行「已下发」，第二行是设备应答或超时。
+/// 单独一个模板而不是复用 toast——只有命令这里需要第二行。
+#[derive(Template)]
+#[template(path = "command_result.html")]
+struct CommandResult {
+    ok: bool,
+    message: String,
+    detail: String,
+}
+
+impl CommandResult {
+    fn err(message: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            message: message.into(),
+            detail: String::new(),
+        }
+    }
+
+    fn render_response(self) -> Response {
+        self.render()
+            .map(|h| Html(h).into_response())
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1470,16 +1498,7 @@ pub async fn device_command(
         .unwrap_or(codec::DEFAULT_ADDRESS);
     let frame = match build_command(&t, &form, addr) {
         Ok(f) => f,
-        Err(e) => {
-            return ToastTemplate {
-                ok: false,
-                message: e,
-            }
-            .render()
-            .map(|h| Html(h).into_response())
-            .unwrap_or_else(|_| StatusCode::BAD_REQUEST.into_response())
-            .into_response();
-        }
+        Err(e) => return CommandResult::err(e).render_response(),
     };
     // 设置地址的载荷就是新地址，发送成功后要记住它，后续命令才会发往新地址。
     let new_addr = if form.action == "set_address" {
@@ -1487,7 +1506,13 @@ pub async fn device_command(
     } else {
         None
     };
-    let label = crate::protocol::codec::command_name(frame.command).to_string();
+    let label = codec::command_name(frame.command).to_string();
+
+    // 发送前先注册等待器：设备应答可能在 send 返回后极短时间内到达，先注册
+    // 才不会漏帧。等待器按**应答**命令字匹配（查询版本发 `r`、设备回 `V`），
+    // 所以设备每秒都在发的 `a` 状态帧不会抢答。
+    let mut rx = expected_response(&form.action).map(|e| state.commands.register(&sn, e));
+
     match state.registry.send(&sn, frame, false).await {
         Ok(()) => {
             state.store.audit(
@@ -1499,20 +1524,86 @@ pub async fn device_command(
             if let Some(a) = new_addr {
                 state.store.update_address(&sn, a as i64);
             }
-            ToastTemplate {
-                ok: true,
+            // 等设备回话：收到就把应答渲染成第二行，超时则提示发送超时。
+            let (detail, got_reply) = match rx.as_mut() {
+                Some(rx) => match tokio::time::timeout(CMD_RESPONSE_TIMEOUT, rx.recv()).await {
+                    Ok(Some(reply)) => (format_reply(&t, &reply), true),
+                    _ => (t.tr("cmd.timeout").to_string(), false),
+                },
+                None => (String::new(), true),
+            };
+            state.commands.unregister(&sn);
+            CommandResult {
+                // 超时不算成功：整块标红，让用户一眼看到没收到应答
+                ok: got_reply,
                 message: format!("{label}{}", t.tr("cmd.sent")),
+                detail,
             }
+            .render_response()
         }
-        Err(e) => ToastTemplate {
-            ok: false,
-            message: e.to_string(),
-        },
+        Err(e) => {
+            state.commands.unregister(&sn);
+            CommandResult::err(e.to_string()).render_response()
+        }
     }
-    .render()
-    .map(|h| Html(h).into_response())
-    .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
-    .into_response()
+}
+
+/// 下发命令后等待设备应答的最长时间。4G 透传往返 + 设备处理，3 秒偏紧。
+const CMD_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// 命令对应的**应答**命令字。请求字与应答字不一定相同（`r` 查询 → `V` 版本）。
+fn expected_response(action: &str) -> Option<u8> {
+    Some(match action {
+        "query" | "version" => cmd::VERSION,
+        "restart" => cmd::RESTART,
+        "set_address" => cmd::SET_ADDRESS,
+        "set_baudrate" => cmd::SET_BAUDRATE,
+        "set_interval" => cmd::SET_REPORT_INTERVAL,
+        "set_sn" => cmd::SET_SN,
+        _ => return None,
+    })
+}
+
+/// 把设备应答翻译成页面上的一行结果。
+fn format_reply(t: &Tr, frame: &Frame) -> String {
+    match frame.command {
+        cmd::VERSION => match Version::raw_string(&frame.payload) {
+            Some(v) => format!("{}：{}", t.tr("cmd.reply_version"), v),
+            None => format!("{}：{}", t.tr("cmd.reply_frame"), hex_bytes(&frame.payload)),
+        },
+        // 设置类命令 + 重启：设备回 1 字节 ack（0x30 成功 / 0x31 重发 / 0x32 Flash 失败）
+        cmd::SET_ADDRESS
+        | cmd::SET_BAUDRATE
+        | cmd::SET_REPORT_INTERVAL
+        | cmd::SET_SN
+        | cmd::RESTART => match codec::parse_ack(&frame.payload) {
+            Some(code) => format!("{}：{}", t.tr("cmd.reply_ack"), ack_text(t, code)),
+            None => format!("{}：{}", t.tr("cmd.reply_frame"), hex_bytes(&frame.payload)),
+        },
+        other => format!(
+            "{}：{} {}",
+            t.tr("cmd.reply_frame"),
+            codec::command_name(other),
+            hex_bytes(&frame.payload)
+        ),
+    }
+}
+
+fn ack_text(t: &Tr, code: u8) -> String {
+    match code {
+        ack::CONTINUE => t.tr("cmd.ack_ok").to_string(),
+        ack::RETRY => t.tr("cmd.ack_retry").to_string(),
+        ack::FLASH_FAIL => t.tr("cmd.ack_flash_fail").to_string(),
+        other => format!("0x{other:02X}"),
+    }
+}
+
+fn hex_bytes(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|b| format!("{b:02X}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// 组装下发命令。`addr` 是设备**当前**的串口地址——所有命令帧都必须带上它，
@@ -1536,16 +1627,10 @@ fn build_command(t: &Tr, form: &CommandForm, addr: u8) -> Result<Frame, String> 
             }
             Frame::new(addr, cmd::SET_ADDRESS, vec![new_addr])
         }
-        "set_baudrate" => {
-            let idx: u8 = value
-                .trim()
-                .parse()
-                .map_err(|_| t.tr("cmd.err_baud").to_string())?;
-            if idx > 9 {
-                return Err(t.tr("cmd.err_baud").to_string());
-            }
-            Frame::new(addr, cmd::SET_BAUDRATE, codec::baud_para(idx).to_vec())
-        }
+        // 暂不开放：MDVR 是透传链路，不知道 UPS 改了波特率，仍按旧波特率收发，
+        // 一旦下发就会 UPS↔MDVR 断链（平台也跟着失联）。入口保留、UI 置灰，
+        // 等想好怎么协同（例如同时改 MDVR 串口参数）再启用。
+        "set_baudrate" => return Err(t.tr("cmd.err_baud_disabled").to_string()),
         "set_interval" => {
             let secs: u16 = value
                 .trim()

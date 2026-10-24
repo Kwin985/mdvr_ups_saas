@@ -31,14 +31,16 @@
       <div class="op-row">
         <button class="btn primary" type="button"
                 hx-post="/devices/{{ sn }}/command" hx-vals='{"action":"version"}'
-                hx-target="#cmd-result" hx-swap="innerHTML">{{ t.tr("panel.op_version") }}</button>
+                hx-target="#cmd-result" hx-swap="innerHTML"
+                hx-disabled-elt="this">{{ t.tr("panel.op_version") }}</button>
         <button class="btn danger" type="button"
                 hx-post="/devices/{{ sn }}/command" hx-vals='{"action":"restart"}'
                 hx-confirm="{{ t.tr("panel.op_restart_confirm") }}"
-                hx-target="#cmd-result" hx-swap="innerHTML">{{ t.tr("panel.op_restart") }}</button>
+                hx-target="#cmd-result" hx-swap="innerHTML"
+                hx-disabled-elt="this">{{ t.tr("panel.op_restart") }}</button>
         <a class="btn ghost" href="/analysis?sn={{ sn }}">{{ t.tr("panel.op_analysis") }}</a>
       </div>
-      <form class="op-sn" hx-post="/devices/{{ sn }}/command" hx-target="#cmd-result" hx-swap="innerHTML">
+      <form class="op-sn" hx-post="/devices/{{ sn }}/command" hx-target="#cmd-result" hx-swap="innerHTML" hx-disabled-elt="find button">
         <input type="hidden" name="action" value="set_sn">
         <label>{{ t.tr("panel.op_sn") }}
           <input name="value" maxlength="20" placeholder="{{ t.tr("panel.op_sn_ph") }}" required>
@@ -55,19 +57,22 @@
       <div class="panel-head"><h3>{{ t.tr("panel.params") }}</h3></div>
       {% if can_control %}
       <div class="param-grid">
-        <form class="param-row" hx-post="/devices/{{ sn }}/command" hx-target="#cmd-result" hx-swap="innerHTML">
+        <form class="param-row" hx-post="/devices/{{ sn }}/command" hx-target="#cmd-result" hx-swap="innerHTML" hx-disabled-elt="find button">
           <input type="hidden" name="action" value="set_address">
           <span class="param-label">{{ t.tr("panel.param_address") }}</span>
           <input name="value" type="number" min="0" max="247" value="{{ address }}" required>
           <button class="btn primary" type="submit">{{ t.tr("panel.param_set") }}</button>
         </form>
-        <form class="param-row" hx-post="/devices/{{ sn }}/command" hx-target="#cmd-result" hx-swap="innerHTML">
+        {# 波特率暂不开放：MDVR 透传不跟随 UPS 的波特率变化，一改就断链。
+           入口保留、置灰，等想好协同方案再启用。 #}
+        <form class="param-row is-disabled">
           <input type="hidden" name="action" value="set_baudrate">
           <span class="param-label">{{ t.tr("panel.param_baud") }}</span>
-          <select name="value">{{ baud_options|safe }}</select>
-          <button class="btn primary" type="submit">{{ t.tr("panel.param_set") }}</button>
+          <select name="value" disabled>{{ baud_options|safe }}</select>
+          <button class="btn primary" type="submit" disabled>{{ t.tr("panel.param_set") }}</button>
         </form>
-        <form class="param-row" hx-post="/devices/{{ sn }}/command" hx-target="#cmd-result" hx-swap="innerHTML">
+        <p class="hint param-warn">{{ t.tr("panel.param_baud_disabled") }}</p>
+        <form class="param-row" hx-post="/devices/{{ sn }}/command" hx-target="#cmd-result" hx-swap="innerHTML" hx-disabled-elt="find button">
           <input type="hidden" name="action" value="set_interval">
           <span class="param-label">{{ t.tr("panel.param_interval") }}</span>
           <div class="param-suffix">

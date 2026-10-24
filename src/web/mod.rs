@@ -17,6 +17,7 @@ use tower_http::compression::CompressionLayer;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
+use crate::command_bus::CommandBus;
 use crate::ingest::registry::Registry;
 use crate::metrics::Metrics;
 use crate::ota::OtaManager;
@@ -26,6 +27,7 @@ use crate::storage::Store;
 use handlers::AppState;
 use rbac::Rbac;
 
+#[allow(clippy::too_many_arguments)]
 pub fn build_state(
     cfg: Arc<crate::config::Config>,
     store: Store,
@@ -34,6 +36,7 @@ pub fn build_state(
     metrics: Arc<Metrics>,
     rbac: Arc<Rbac>,
     settings: Arc<SettingsStore>,
+    commands: Arc<CommandBus>,
 ) -> AppState {
     AppState {
         cfg,
@@ -44,6 +47,7 @@ pub fn build_state(
         rbac,
         settings,
         login_throttle: Arc::new(auth::LoginThrottle::default()),
+        commands,
     }
 }
 

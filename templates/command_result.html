@@ -1,0 +1,4 @@
+<div class="toast {% if ok %}ok{% else %}err{% endif %}">
+  <div class="toast-line">{{ message }}</div>
+  {% if !detail.is_empty() %}<div class="toast-detail mono">{{ detail }}</div>{% endif %}
+</div>

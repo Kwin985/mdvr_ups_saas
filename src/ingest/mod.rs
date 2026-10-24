@@ -21,6 +21,7 @@ use tokio::sync::mpsc;
 use tokio::time::{Instant, timeout};
 use uuid::Uuid;
 
+use crate::command_bus::CommandBus;
 use crate::config::Config;
 use crate::metrics::Metrics;
 use crate::settings::SettingsStore;
@@ -39,6 +40,8 @@ pub struct Ingest {
     pub metrics: Arc<Metrics>,
     /// 系统配置（运行时可变）：探测窗口 / 下行间隔 / 离线判定等
     pub settings: Arc<SettingsStore>,
+    /// 命令应答总线：把设备上行应答投递给等待中的 web 请求
+    pub commands: Arc<CommandBus>,
 }
 
 /// 注册握手结果。身份信息都是可选的，按可信度从高到低：
@@ -264,6 +267,9 @@ impl Ingest {
         dev_addr: &mut Option<u8>,
         conn_id: Uuid,
     ) {
+        // 先把帧交给命令应答总线：web 端下发命令后可能在等这一帧（版本/应答）。
+        // 匹配由总线按期望命令字判断，不会把周期性的 `a` 帧误投给等待者。
+        self.commands.deliver(sn, &frame);
         // 设备地址以它**上行帧的地址字节**为准：`d` 命令改址后，设备后续的
         // `a`/`V` 帧都会带新地址。这里只认状态帧（周期上报、最权威），
         // 不去认设置类应答——应答是设备用**旧地址**回的，会把刚设好的新地址冲掉。
