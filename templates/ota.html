@@ -10,6 +10,15 @@
 </div>
 {% if !flash.is_empty() %}<div class="flash">{{ flash }}</div>{% endif %}
 {% if !error.is_empty() %}<div class="alert err">{{ error }}</div>{% endif %}
+{% if !ota_enabled %}
+{#- 升级停用：入口保留但不可用。上传固件到库不触碰设备，仍然开放；
+     只有"发起升级"这一动作被挡住。 -#}
+<div class="ota-locked">
+  <strong>{{ t.tr("ota.disabled_title") }}</strong>
+  <p>{{ ota_disabled_reason }}</p>
+  <p class="hint">{{ t.tr("ota.disabled_hint") }}</p>
+</div>
+{% endif %}
 
 <div class="panel">
   <div class="panel-head"><h3>{{ t.tr("ota.quick") }}</h3><span class="muted">{{ t.tr("ota.quick_tip") }}</span></div>
@@ -57,7 +66,27 @@
 
   <div class="panel">
     <div class="panel-head"><h3>{{ t.tr("ota.start") }}</h3><span class="muted">{{ t.tr("ota.isolate_note") }}</span></div>
-    {% if can_manage %}
+    {% if !ota_enabled %}
+    {#- 表单整体置灰：保留结构让人知道这里有这个功能，但提交不出去 -#}
+    <form class="stack-form is-disabled" aria-disabled="true">
+      <label>{{ t.tr("ota.target") }}
+        <select name="sn" disabled>
+          {% for d in devices %}
+          <option value="{{ d.sn }}">{{ d.sn }} · {{ d.mdvr_id }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>{{ t.tr("ota.fw_version") }}
+        <select name="firmware_id" disabled>
+          {% for f in firmware %}
+          <option value="{{ f.id }}">v{{ f.version }} · {{ f.filename }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button class="btn primary" type="submit" disabled>{{ t.tr("ota.start_submit") }}</button>
+    </form>
+    <p class="hint param-warn">{{ t.tr("ota.disabled_form_hint") }}</p>
+    {% else if can_manage %}
     <form class="stack-form" method="post" action="/ota/start">
       <label>{{ t.tr("ota.target") }}
         <select name="sn" required>

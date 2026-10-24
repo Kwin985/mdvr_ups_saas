@@ -173,6 +173,14 @@ MDVR 是透传链路，**不跟随** UPS 的波特率变化：UPS 被改成 1920
 
 ## 5. OTA（ISP 升级）
 
+> **当前已停用**：`src/ota/mod.rs` 的 `OTA_ENABLED = false`。页面入口置灰、后端
+> `/ota/start` 与 `/ota/{sn}/start` 直接拒绝，不创建 job、不触碰设备。固件上传到库
+> 不触碰设备，仍开放；历史任务与固件库照常可查。
+> 启用条件见 `OTA_ENABLED` 的文档注释，并有编译期断言 `const _: () = assert!(!OTA_ENABLED)`
+> 兜底——改成 `true` 会直接编译失败，必须 consciously 处理。
+> 停用原因：OTA 全流程尚未在真机上完整跑通过一次，且 `S` 的载荷形式与 MDVR 参考实现
+> 互相矛盾（见第 9 节）。
+
 ```text
 平台                                   UPS
  │  S  Size Number                      │

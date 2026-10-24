@@ -348,6 +348,10 @@ struct DevicePanel {
     remote: String,
     can_control: bool,
     can_ota: bool,
+    /// OTA 总开关。停用时「发起升级」按钮置灰，后端同样拒绝。
+    ota_enabled: bool,
+    /// 停用原因，按钮提示用
+    ota_disabled_reason: &'static str,
 }
 
 #[derive(Template)]
@@ -386,6 +390,10 @@ struct OtaTemplate {
     can_manage: bool,
     /// 从设备面板跳转时预选的目标设备
     selected_sn: String,
+    /// OTA 总开关（`ota::OTA_ENABLED`）。停用时页面只读，不允许发起升级。
+    ota_enabled: bool,
+    /// 停用原因，页面提示用
+    ota_disabled_reason: &'static str,
 }
 
 #[derive(Template)]
@@ -1326,6 +1334,8 @@ pub async fn device_panel(
             .unwrap_or_else(|| "—".into()),
         can_control,
         can_ota,
+        ota_enabled: state.ota.enabled(),
+        ota_disabled_reason: crate::ota::OTA_DISABLED_REASON,
     }
     .render()
     .map(Html)
@@ -1778,6 +1788,8 @@ pub async fn ota_page(
         error: q.error.unwrap_or_default(),
         can_manage,
         selected_sn: q.sn.unwrap_or_default(),
+        ota_enabled: state.ota.enabled(),
+        ota_disabled_reason: crate::ota::OTA_DISABLED_REASON,
     }
     .render()
     .map(Html)
@@ -1956,6 +1968,22 @@ pub async fn ota_start(
     Form(form): Form<OtaStartForm>,
 ) -> Response {
     let t = Tr::from(state.settings.lang()).with_site(state.settings.str("site_title"));
+    // 总开关：停用期间直接拒绝，不创建 job、不触碰设备。
+    // 这一层是硬闸——页面按钮可以置灰，但手搓请求必须在这里被挡住。
+    if !state.ota.enabled() {
+        return ToastTemplate {
+            ok: false,
+            message: format!(
+                "{}：{}",
+                t.tr("cmd.err_start"),
+                crate::ota::OTA_DISABLED_REASON
+            ),
+        }
+        .render()
+        .map(|h| Html(h).into_response())
+        .unwrap_or_else(|_| StatusCode::BAD_REQUEST.into_response())
+        .into_response();
+    }
     if !can_see_device(&state, &user, &form.sn).await {
         return toast_err(t.tr("cmd.err_dev_upgrade"));
     }

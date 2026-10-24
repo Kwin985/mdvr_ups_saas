@@ -1044,6 +1044,29 @@ tbody tr:hover td { background: rgba(79, 195, 247, 0.05); }
 .param-row.is-disabled { opacity: 0.45; }
 .param-row.is-disabled select, .param-row.is-disabled button { cursor: not-allowed; }
 .param-warn { color: var(--warn); margin: 2px 0 6px; }
+/* 升级停用：入口保留但不可用 */
+.ota-locked {
+  border: 1px solid rgba(255, 152, 0, 0.35);
+  background: var(--warn-soft);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+.ota-locked strong { color: var(--warn); }
+.ota-locked p { margin: 4px 0 0; color: var(--text-soft); }
+/* 用 <span> 而不是 <button disabled>：disabled 的按钮不触发 hover，
+   title 提示就永远看不到，用户不知道为什么点不动 */
+.btn.is-locked,
+.btn.is-locked:hover {
+  cursor: not-allowed;
+  opacity: 0.45;
+  background: rgba(17, 34, 51, 0.6);
+  border-color: var(--border-soft);
+  color: var(--muted);
+}
+.stack-form.is-disabled { opacity: 0.45; }
+.stack-form.is-disabled select,
+.stack-form.is-disabled button { cursor: not-allowed; }
 /* 命令下发后要等设备应答，这几秒里按钮置灰给个反馈 */
 .htmx-request { opacity: 0.55; }
 

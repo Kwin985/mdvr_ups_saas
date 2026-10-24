@@ -38,6 +38,26 @@ use crate::metrics::Metrics;
 use crate::protocol::{Frame, ack, cmd, codec};
 use crate::storage::{FirmwareRow, NewJob, Store};
 
+/// OTA 总开关。**默认关闭**。
+///
+/// 升级会写 Flash 并重启设备：载荷形式或流程只要和真机差一点，设备就可能起不来，
+/// 只能到现场用串口工具救回。而 OTA 全流程至今没有在真机上完整跑通过一次——
+/// `S` 的载荷形式到底是 `Size+Number` 还是单个命令字母，与 MDVR 参考实现互相矛盾
+/// （见 `docs/protocol.md` 第 9 节）。验证通过之前，任何入口都不允许触发升级。
+///
+/// 重新启用需同时满足：
+/// 1. 用一台测试 UPS 完整跑通 `S → D… → F`，重启后版本号确实变成新版本；
+/// 2. 与 UPS 固件方确认 `S`/`D`/`F` 的载荷形式；
+/// 3. 确认中途断链、掉电后的恢复手段。
+///
+/// 刻意**不做成后台设置项**：重新启用要改这里、重新构建发布，用发布流程的仪式感
+/// 防止误触。页面与后端共用 [`OtaManager::enabled`]，不会出现"页面还能点、后端已拒绝"。
+pub const OTA_ENABLED: bool = false;
+
+/// 停用原因。页面提示与后端拒绝共用同一句话，避免两边说法不一致。
+pub const OTA_DISABLED_REASON: &str =
+    "升级功能尚未通过真机验证，已停用；启用前需完成 S→D→F 全流程联调";
+
 #[derive(Debug, thiserror::Error)]
 pub enum OtaError {
     #[error("设备不在线")]
@@ -50,6 +70,8 @@ pub enum OtaError {
     TooLarge(usize),
     #[error("设备已取消升级")]
     Cancelled,
+    #[error("升级功能已停用：{0}")]
+    Disabled(&'static str),
     #[error("等待设备应答超时")]
     Timeout,
     #[error("设备拒绝升级，应答 {0:#04X}")]
@@ -142,6 +164,11 @@ impl OtaManager {
         }
     }
 
+    /// 升级入口是否开放。页面与后端共用它，避免出现"页面还能点、后端已拒绝"。
+    pub fn enabled(&self) -> bool {
+        OTA_ENABLED
+    }
+
     pub fn progress(&self, job_id: &str) -> Option<JobProgress> {
         self.jobs.get(job_id).map(|j| j.clone())
     }
@@ -178,6 +205,10 @@ impl OtaManager {
         firmware_id: &str,
         actor: &str,
     ) -> Result<String, OtaError> {
+        // 总开关：停用期间任何调用方（页面、手搓请求、脚本）都拿不到 job_id
+        if !OTA_ENABLED {
+            return Err(OtaError::Disabled(OTA_DISABLED_REASON));
+        }
         let handle = self.registry.get(sn).await.ok_or(OtaError::Offline)?;
         if handle.is_busy() {
             return Err(OtaError::Busy);
@@ -623,6 +654,20 @@ async fn wait_ack(
     }
 }
 
+/// 编译期护栏：升级总开关默认必须是关的。
+///
+/// 这不是测试逻辑，是**防止误开**的闸门。谁想把 `OTA_ENABLED` 改成 `true`，
+/// 编译器会在这里拦住，逼着他先 consciously 删掉/改掉这条断言——用编译期仪式感
+/// 拖慢"顺手打开一个未验证功能"的动作。启用条件见 `OTA_ENABLED` 的文档注释。
+const _: () = assert!(
+    !OTA_ENABLED,
+    "OTA_ENABLED 被打开了：真机跑通过 S→D→F 全流程了吗？与 UPS 固件方确认过 S/D/F 载荷形式了吗？"
+);
+const _: () = assert!(
+    OTA_DISABLED_REASON.len() >= 10,
+    "OTA_DISABLED_REASON 要说清楚停用原因，不能是一句空话"
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -685,5 +730,12 @@ mod tests {
         assert_eq!(codec::parse_data_ack(&[ack::CONTINUE]), None);
         // 载荷太短（少于 FrameID+ack 三字节）一律判非法
         assert_eq!(codec::parse_data_ack(&[0x00, 0x08]), None);
+    }
+
+    /// 停用原因不能是空话，页面要拿它向用户解释。
+    #[test]
+    fn disabled_reason_is_actionable() {
+        assert!(OTA_DISABLED_REASON.len() >= 10);
+        assert!(OTA_DISABLED_REASON.contains("停用"));
     }
 }
