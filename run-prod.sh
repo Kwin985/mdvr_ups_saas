@@ -12,9 +12,16 @@ if [ ! -f .env.prod ]; then
     exit 1
 fi
 
-if [ ! -x ./target/release/mdvr_ups.exe ]; then
-    echo "找不到 ./target/release/mdvr_ups.exe，先执行 cargo build --release" >&2
-    exit 1
+# 二进制名带不带 .exe 取决于在哪个平台构建的（Windows 带、Linux 不带），
+# 两个都找，这样同一份启动脚本在 Windows 和 WSL/Linux 上都能用。
+BIN=./target/release/mdvr_ups
+if [ ! -x "$BIN" ]; then
+  BIN=./target/release/mdvr_ups.exe
+fi
+
+if [ ! -x "$BIN" ]; then
+  echo "找不到 release 二进制（./target/release/mdvr_ups[.exe]），先执行 cargo build --release" >&2
+  exit 1
 fi
 
 # set -a 让 source 进来的变量自动 export
@@ -23,4 +30,4 @@ set -a
 . ./.env.prod
 set +a
 
-exec ./target/release/mdvr_ups.exe
+exec "$BIN"
