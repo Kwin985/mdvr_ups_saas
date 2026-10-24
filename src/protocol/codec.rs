@@ -261,6 +261,24 @@ impl fmt::Display for Version {
     }
 }
 
+impl Version {
+    /// 设备上报的**原始版本字符串**，原样保留，不做 `major.minor.patch` 拆解。
+    ///
+    /// 文档示例 `V010101` 是 7 字节；但现场设备（UPS-192.168.1.169）返回 9 字节
+    /// `V26052602`，强制按「V + 3 组两位数字」拆解会丢掉末两位、并产生无意义的
+    /// `26.5.26`；一旦字节数或格式与假设不符，`parse` 整段解析失败、版本号彻底
+    /// 丢失。所以设备侧只取「可打印 ASCII 正文」存库——展示什么就存什么。
+    pub fn raw_string(payload: &[u8]) -> Option<String> {
+        let s: String = payload
+            .iter()
+            .filter(|b| (**b as char).is_ascii_graphic())
+            .map(|b| *b as char)
+            .collect();
+        let s = s.trim().to_string();
+        if s.is_empty() { None } else { Some(s) }
+    }
+}
+
 // ---------------------------------------------------------------- 设置类命令
 
 /// 波特率档位表（文档 3.3 节 `para` bit0-3）。
@@ -445,6 +463,29 @@ mod tests {
             Version::parse(b"V0101X1"),
             Err(CodecError::InvalidVersion)
         ));
+    }
+
+    #[test]
+    fn version_raw_preserves_real_device_string() {
+        // 现场真实设备（UPS-192.168.1.169）返回 9 字节 `V26052602`；
+        // 旧的 parse 会截断成无意义的 `26.5.26`，这里必须原样保留。
+        assert_eq!(
+            Version::raw_string(b"V26052602"),
+            Some("V26052602".to_string())
+        );
+        // 文档示例 7 字节仍可读
+        assert_eq!(
+            Version::raw_string(b"V010101"),
+            Some("V010101".to_string())
+        );
+        // 尾随不可打印字节（NUL / 控制符）会被裁掉，只留可打印正文
+        assert_eq!(
+            Version::raw_string(b"V26052602\x00\x01"),
+            Some("V26052602".to_string())
+        );
+        // 空载荷返回 None，避免写入空版本号
+        assert_eq!(Version::raw_string(b""), None);
+        assert_eq!(Version::raw_string(b"\x00\x01"), None);
     }
 
     #[test]

@@ -288,12 +288,16 @@ impl Ingest {
                 }
                 Err(e) => tracing::warn!(sn = %sn, error = %e, "'a' 状态载荷解析失败"),
             },
-            cmd::VERSION => match Version::parse(&frame.payload) {
-                Ok(v) => {
+            cmd::VERSION => match Version::raw_string(&frame.payload) {
+                Some(v) => {
                     tracing::info!(sn = %sn, version = %v, "收到 UPS 版本信息");
-                    self.store.update_firmware(sn, &v.to_string());
+                    self.store.update_firmware(sn, &v);
                 }
-                Err(e) => tracing::warn!(sn = %sn, error = %e, "'V' 版本载荷解析失败"),
+                None => tracing::warn!(
+                    sn = %sn,
+                    payload = ?frame.payload,
+                    "'V' 版本载荷无法解析为文本"
+                ),
             },
             // OTA 三个阶段：S / F 的应答是 1 字节 ack，D 的应答是 FrameID + ack
             cmd::OTA_BEGIN | cmd::OTA_END => {

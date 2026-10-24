@@ -803,6 +803,17 @@ pub async fn analysis_export(
     }
     samples.reverse(); // 存储按 DESC 返回 → CSV 按时间从早到晚
 
+    // 版本是**设备级**属性（由 'V' 帧写入 devices.firmware_version），样本行
+    // 本身不带 firmware（`from_status_a` 恒置空）。这里取一次复用，否则整列空白。
+    let fw_version = state
+        .store
+        .device(&sn)
+        .await
+        .ok()
+        .flatten()
+        .map(|d| d.firmware_version)
+        .unwrap_or_default();
+
     // CSV 表头（带单位，便于直接用表格软件打开）。首列即可读的本地时间，
     // 不再输出 13 位毫秒时间戳；开头加 UTF-8 BOM，Excel 打开中文（健康状态等）不乱码。
     let mut csv = String::from(
@@ -819,7 +830,7 @@ pub async fn analysis_export(
             s.battery,
             s.load_percent,
             s.health,
-            csv_field(&s.firmware),
+            csv_field(&fw_version),
         ));
     }
 
@@ -1184,9 +1195,13 @@ pub async fn device_panel(
         can_assign: state.rbac.enforce(&user.role, "/devices/*/assign", "POST"),
         online: live.is_some(),
         busy: live.as_ref().map(|l| l.is_busy()).unwrap_or(false),
+        // 版本号只来自设备上报的 'V' 帧（写入 devices.firmware_version）；
+        // 状态样本 `firmware` 恒为空串，必须过滤掉空值再回退，否则
+        // `Some("")` 会让 `unwrap_or` 永不生效、面板一直显示空白。
         firmware: latest
             .as_ref()
             .map(|s| s.firmware.clone())
+            .filter(|s| !s.is_empty())
             .unwrap_or(row.firmware_version.clone()),
         address: row.address,
         baudrate: row.baudrate,
