@@ -337,7 +337,7 @@ impl Ingest {
                         ack = codec::ack_name(code),
                         "升级应答"
                     );
-                    self.ota.deliver_ack(sn, code);
+                    self.ota.deliver_ack(sn, None, code);
                 }
             }
             cmd::OTA_DATA => match codec::parse_data_ack(&frame.payload) {
@@ -348,7 +348,8 @@ impl Ingest {
                         ack = codec::ack_name(code),
                         "升级数据应答"
                     );
-                    self.ota.deliver_ack(sn, code);
+                    // 带上 FrameID：OTA 状态机只认当前包的应答，迟到的旧应答会被丢弃
+                    self.ota.deliver_ack(sn, Some(frame_id), code);
                 }
                 None => tracing::warn!(sn = %sn, payload = ?frame.payload, "'D' 应答载荷非法"),
             },

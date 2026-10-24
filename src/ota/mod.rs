@@ -9,17 +9,27 @@
 //!   * `F`：结束升级（空载荷），等待 0x30；0x31 重发、0x32 需整轮重来。
 //!
 //! 升级期间设备置为 busy，普通轮询/配置下发被接入层拒绝，避免应答混淆。
+//!
+//! # 与 MDVR 参考实现（`Serial_Ups.cpp`）的取舍
+//!
+//! 见 `docs/protocol.md` 第 9 节「与 MDVR 参考实现的差异」。要点：
+//!   * 参考实现把 `S`/`F` 的载荷发成命令字母本身、`D` 不带 `FrameID`，且把首尾
+//!     `0x7E` 也一起转义——这些都与协议文档、与实机抓包矛盾，**没有照抄**；
+//!   * 参考实现的升级应答解析不校验帧头帧尾和校验和，且把 `D` 应答的第 2 字节
+//!     （若真带 FrameID，那是 FrameID 高字节）当成 ack，**已避免**；
+//!   * 参考实现有价值的点已吸收：`D` 应答按 `FrameID` 核对（不再来者不拒）、
+//!     `F` 的 0x32 走整轮重来、`F` 超时放宽到 5s。
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use dashmap::DashMap;
 use serde::Serialize;
 use tokio::sync::mpsc;
-use tokio::time::{Instant, timeout};
+use tokio::time::timeout;
 
 use crate::config::Config;
 use crate::settings::SettingsStore;
@@ -58,9 +68,19 @@ impl From<SendError> for OtaError {
     }
 }
 
+/// 设备回给平台的升级应答。
+///
+/// `frame_id` 只有 `D` 的应答带（协议：`D + FrameID + ack`），`S`/`F` 的应答是
+/// 单字节 ack，所以是 `None`。核对 FrameID 是必须的：4G 链路会丢包和重传，
+/// 上一包的迟到应答如果不核对，会被当成当前包的确认，静默跳过一个包。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ack {
+    pub frame_id: Option<u16>,
+    pub code: u8,
+}
+
 #[derive(Debug, Clone, Serialize)]
-pub struct JobProgress {
-    pub id: String,
+pub struct JobProgress {    pub id: String,
     pub sn: String,
     pub firmware_id: String,
     pub firmware_version: String,
@@ -88,7 +108,7 @@ pub struct OtaManager {
     /// 系统配置（运行时可变）：OTA 超时 / 重试 / 窗口参数
     settings: Arc<SettingsStore>,
     /// sn -> 当前升级任务的应答接收端
-    acks: DashMap<String, mpsc::Sender<u8>>,
+    acks: DashMap<String, mpsc::Sender<Ack>>,
     /// job_id -> 实时进度
     jobs: DashMap<String, JobProgress>,
     /// job_id -> 取消标志
@@ -115,10 +135,10 @@ impl OtaManager {
         })
     }
 
-    /// 接入层收到 ACK 帧后调用。
-    pub fn deliver_ack(&self, sn: &str, code: u8) {
+    /// 接入层收到 ACK 帧后调用。`frame_id` 仅 `D` 命令的应答带（`S`/`F` 为 `None`）。
+    pub fn deliver_ack(&self, sn: &str, frame_id: Option<u16>, code: u8) {
         if let Some(tx) = self.acks.get(sn) {
-            let _ = tx.try_send(code);
+            let _ = tx.try_send(Ack { frame_id, code });
         }
     }
 
@@ -228,7 +248,7 @@ impl OtaManager {
             &format!("job={job_id} firmware={} v{}", fw.filename, fw.version),
         );
 
-        let (ack_tx, ack_rx) = mpsc::channel::<u8>(64);
+        let (ack_tx, ack_rx) = mpsc::channel::<Ack>(64);
         self.acks.insert(sn.to_string(), ack_tx);
         let cancel = Arc::new(AtomicBool::new(false));
         // key 使用 sn 前缀，便于按设备取消
@@ -256,7 +276,7 @@ impl OtaManager {
         bytes: Vec<u8>,
         packets: u16,
         address: u8,
-        mut ack_rx: mpsc::Receiver<u8>,
+        mut ack_rx: mpsc::Receiver<Ack>,
         cancel: Arc<AtomicBool>,
     ) {
         let result = self
@@ -319,7 +339,7 @@ impl OtaManager {
         bytes: &[u8],
         packets: u16,
         address: u8,
-        ack_rx: &mut mpsc::Receiver<u8>,
+        ack_rx: &mut mpsc::Receiver<Ack>,
         cancel: &AtomicBool,
     ) -> Result<(), OtaError> {
         let max_restarts = self.settings.u32("ota_max_restarts", self.cfg.ota_max_restarts);
@@ -349,53 +369,97 @@ impl OtaManager {
                     Err(e) => return Err(e),
                 }
             }
-
             if restart {
-                restarts += 1;
-                if restarts > max_restarts {
+                if !self.bump_restart(job_id, sn, &mut restarts, max_restarts) {
                     return Err(OtaError::FlashFail(restarts));
                 }
-                tracing::warn!(sn = %sn, round = restarts, "UPS 报告 Flash 写入失败，整轮重来");
-                self.patch_progress(job_id, |p| {
-                    p.state = "restarting".into();
-                    p.sent_packets = 0;
-                    p.percent = 0;
-                    p.message = format!("Flash 写入失败，第 {restarts} 轮重试");
-                });
                 continue;
             }
-            break;
-        }
 
-        // 结束帧：0x30 写入成功；0x31 校验错重发；0x32 写 Flash 失败需整轮重来
-        let end_frame = Frame::new(address, cmd::OTA_END, codec::ota_end_payload());
-        let mut confirmed = false;
-        for _ in 0..3 {
-            drain(ack_rx);
-            self.send(sn, end_frame.clone()).await?;
-            match timeout(Duration::from_secs(3), ack_rx.recv()).await {
-                Ok(Some(code)) if code == ack::CONTINUE => {
-                    confirmed = true;
-                    break;
+            // 结束帧在重试环内：`F` 报 0x32 说明最后这次写 Flash 也失败了，
+            // 按协议同样要整轮重来，不能直接把已经传完的任务判失败。
+            match self
+                .end_phase(job_id, sn, address, ack_rx, cancel)
+                .await
+            {
+                Ok(()) => break,
+                Err(OtaError::FlashFail(_)) => {
+                    if !self.bump_restart(job_id, sn, &mut restarts, max_restarts) {
+                        return Err(OtaError::FlashFail(restarts));
+                    }
+                    continue;
                 }
-                Ok(Some(code)) if code == ack::FLASH_FAIL => {
-                    return Err(OtaError::FlashFail(0));
-                }
-                Ok(Some(code)) => {
-                    tracing::warn!(sn = %sn, ack = codec::ack_name(code), "结束帧应答异常，重发 F");
-                }
-                _ => {}
+                Err(e) => return Err(e),
             }
         }
-        if !confirmed {
-            return Err(OtaError::Timeout);
-        }
+
         self.patch_progress(job_id, |p| {
             p.sent_packets = packets;
             p.percent = 100;
             p.message = "设备已确认升级完成".into();
         });
         Ok(())
+    }
+
+    /// 记一次「整轮重来」。返回 false 表示已超过上限，调用方应结束任务。
+    fn bump_restart(&self, job_id: &str, sn: &str, restarts: &mut u32, max: u32) -> bool {
+        *restarts += 1;
+        if *restarts > max {
+            return false;
+        }
+        tracing::warn!(sn = %sn, round = *restarts, "UPS 报告 Flash 写入失败，整轮重来");
+        self.patch_progress(job_id, |p| {
+            p.state = "restarting".into();
+            p.sent_packets = 0;
+            p.percent = 0;
+            p.message = format!("Flash 写入失败，第 {} 轮重试", *restarts);
+        });
+        true
+    }
+
+    /// 结束帧 `F`：0x30 判定成功；0x31 重发；0x32 交由上层整轮重来。
+    ///
+    /// 超时按 `ota_end_timeout_ms`（默认 5s）计——`F` 会让设备校验整包并写 Flash，
+    /// 明显慢于普通数据包；MDVR 参考实现同样给的是 5s。
+    async fn end_phase(
+        &self,
+        job_id: &str,
+        sn: &str,
+        address: u8,
+        ack_rx: &mut mpsc::Receiver<Ack>,
+        cancel: &AtomicBool,
+    ) -> Result<(), OtaError> {
+        let end_frame = Frame::new(address, cmd::OTA_END, codec::ota_end_payload());
+        let wait = Duration::from_millis(
+            self.settings
+                .u64("ota_end_timeout_ms", self.cfg.ota_end_timeout_ms),
+        );
+        self.patch_progress(job_id, |p| {
+            p.message = "等待设备确认结束帧".into();
+        });
+        for attempt in 1..=3 {
+            if cancel.load(Ordering::SeqCst) {
+                return Err(OtaError::Cancelled);
+            }
+            drain(ack_rx);
+            self.send(sn, end_frame.clone()).await?;
+            match wait_ack(ack_rx, wait, None).await {
+                Some(ack::CONTINUE) => return Ok(()),
+                Some(ack::FLASH_FAIL) => return Err(OtaError::FlashFail(0)),
+                Some(other) => {
+                    tracing::warn!(
+                        sn = %sn,
+                        attempt,
+                        ack = codec::ack_name(other),
+                        "结束帧应答异常，重发 F"
+                    );
+                }
+                None => {
+                    tracing::warn!(sn = %sn, attempt, "结束帧应答超时，重发 F");
+                }
+            }
+        }
+        Err(OtaError::Timeout)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -406,7 +470,7 @@ impl OtaManager {
         size: u16,
         packets: u16,
         address: u8,
-        ack_rx: &mut mpsc::Receiver<u8>,
+        ack_rx: &mut mpsc::Receiver<Ack>,
         cancel: &AtomicBool,
     ) -> Result<(), OtaError> {
         let payload = codec::ota_begin_payload(size, packets);
@@ -422,11 +486,15 @@ impl OtaManager {
             }
             drain(ack_rx);
             self.send(sn, frame.clone()).await?;
-            if let Some(code) = wait(ack_rx, interval).await {
+            if let Some(code) = wait_ack(ack_rx, interval, None).await {
                 match code {
                     ack::CONTINUE => return Ok(()),
                     ack::RETRY => continue,
-                    ack::FLASH_FAIL => return Err(OtaError::FlashFail(0)),
+                    // S 阶段一个字节都还没发，"整轮重来"没有意义；按 0x31 一样继续
+                    // 请求 S，由上面的窗口 deadline 兜底（与 MDVR「重试 S 后失败」一致）。
+                    ack::FLASH_FAIL => {
+                        tracing::warn!(sn = %sn, "开始帧应答 0x32（写 Flash 失败），继续重试 S");
+                    }
                     other => return Err(OtaError::Rejected(other)),
                 }
             }
@@ -445,11 +513,12 @@ impl OtaManager {
         chunk: &[u8],
         total: u16,
         address: u8,
-        ack_rx: &mut mpsc::Receiver<u8>,
+        ack_rx: &mut mpsc::Receiver<Ack>,
         cancel: &AtomicBool,
     ) -> Result<(), OtaError> {
         let payload = codec::ota_data_payload(frame_id, chunk);
         let frame = Frame::new(address, cmd::OTA_DATA, payload);
+        let packet_timeout = Duration::from_millis(self.settings.u64("ota_packet_timeout_ms", self.cfg.ota_packet_timeout_ms));
         let mut attempt = 0u32;
         loop {
             if cancel.load(Ordering::SeqCst) {
@@ -457,7 +526,8 @@ impl OtaManager {
             }
             drain(ack_rx);
             self.send(sn, frame.clone()).await?;
-            match wait(ack_rx, Duration::from_millis(self.settings.u64("ota_packet_timeout_ms", self.cfg.ota_packet_timeout_ms))).await {
+            // 只认当前 FrameID 的应答：上一包的迟到/重复帧直接丢弃，不当成确认
+            match wait_ack(ack_rx, packet_timeout, Some(frame_id)).await {
                 Some(code) if code == ack::CONTINUE => {
                     let sent = frame_id + 1;
                     self.patch_progress(job_id, |p| {
@@ -524,13 +594,96 @@ impl OtaManager {
     }
 }
 
-fn drain(rx: &mut mpsc::Receiver<u8>) {
+fn drain(rx: &mut mpsc::Receiver<Ack>) {
     while rx.try_recv().is_ok() {}
 }
 
-async fn wait(rx: &mut mpsc::Receiver<u8>, dur: Duration) -> Option<u8> {
-    match timeout(dur, rx.recv()).await {
-        Ok(Some(code)) => Some(code),
-        _ => None,
+/// 等一个**属于当前阶段**的应答。
+///
+/// `expect` 是期望的 `FrameID`：数据包阶段传 `Some(id)`，`S`/`F` 阶段传 `None`。
+/// 不匹配的应答（上一包的迟到帧、重复帧）直接丢弃继续等，绝不当成当前包的确认——
+/// 4G 链路会丢包重传，把旧应答当成新确认会静默跳过一个数据包，而这种损坏要等到
+/// 设备校验整包失败才会暴露，很难查。
+async fn wait_ack(
+    rx: &mut mpsc::Receiver<Ack>,
+    dur: Duration,
+    expect: Option<u16>,
+) -> Option<u8> {
+    let deadline = Instant::now() + dur;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return None;
+        }
+        match timeout(left, rx.recv()).await {
+            Ok(Some(a)) if a.frame_id == expect => return Some(a.code),
+            Ok(Some(_)) => continue,
+            _ => return None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ack(frame_id: Option<u16>, code: u8) -> Ack {
+        Ack { frame_id, code }
+    }
+
+    /// 迟到/重复的旧包应答不能被当成当前包的确认。
+    /// 4G 链路会重传，若来者不拒，会静默跳过一个数据包。
+    #[tokio::test]
+    async fn stale_data_ack_is_not_accepted_as_confirmation() {
+        let (tx, mut rx) = mpsc::channel::<Ack>(8);
+        tx.send(ack(Some(6), ack::CONTINUE)).await.unwrap();
+        tx.send(ack(Some(7), ack::CONTINUE)).await.unwrap();
+
+        // 等第 8 包：前两帧都不该被消费成确认
+        let got = wait_ack(&mut rx, Duration::from_millis(50), Some(8)).await;
+        assert_eq!(got, None, "旧包应答不应被当成第 8 包的确认");
+    }
+
+    /// 匹配的 FrameID 才返回 ack，其余照丢。
+    #[tokio::test]
+    async fn matching_frame_id_returns_ack() {
+        let (tx, mut rx) = mpsc::channel::<Ack>(8);
+        tx.send(ack(Some(6), ack::CONTINUE)).await.unwrap();
+        tx.send(ack(Some(8), ack::RETRY)).await.unwrap();
+
+        let got = wait_ack(&mut rx, Duration::from_millis(200), Some(8)).await;
+        assert_eq!(got, Some(ack::RETRY));
+    }
+
+    /// `S`/`F` 阶段没有 FrameID，`None` 应答应被接受；带 FrameID 的（异常）则忽略。
+    #[tokio::test]
+    async fn begin_and_end_phases_accept_id_less_acks() {
+        let (tx, mut rx) = mpsc::channel::<Ack>(8);
+        tx.send(ack(None, ack::CONTINUE)).await.unwrap();
+        assert_eq!(
+            wait_ack(&mut rx, Duration::from_millis(100), None).await,
+            Some(ack::CONTINUE)
+        );
+
+        let (tx, mut rx) = mpsc::channel::<Ack>(8);
+        tx.send(ack(Some(3), ack::CONTINUE)).await.unwrap();
+        assert_eq!(
+            wait_ack(&mut rx, Duration::from_millis(50), None).await,
+            None,
+            "带 FrameID 的应答不该冒充 S/F 的确认"
+        );
+    }
+
+    /// OTA 载荷编解码：D 应答按 `FrameID + ack` 解析，与 MDVR 参考实现
+    /// （把第 2 字节当 ack）不同——真带 FrameID 时它读到的是 FrameID 高字节。
+    #[test]
+    fn data_ack_layout_is_frame_id_then_ack() {
+        assert_eq!(
+            codec::parse_data_ack(&[0x00, 0x08, ack::CONTINUE]),
+            Some((8, ack::CONTINUE))
+        );
+        assert_eq!(codec::parse_data_ack(&[ack::CONTINUE]), None);
+        // 载荷太短（少于 FrameID+ack 三字节）一律判非法
+        assert_eq!(codec::parse_data_ack(&[0x00, 0x08]), None);
     }
 }

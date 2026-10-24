@@ -165,6 +165,14 @@ pub const CATALOG: &[SettingDef] = &[
         kind: Kind::U64 { min: 20, max: 5000 },
         restart: false,
     },
+    SettingDef {
+        key: "ota_end_timeout_ms",
+        group: "ota",
+        label_key: "settings.ota_end_timeout_ms",
+        hint_key: "settings.ota_end_timeout_ms.hint",
+        kind: Kind::U64 { min: 500, max: 60_000 },
+        restart: false,
+    },
     // ---- 界面 ----
     SettingDef {
         key: "language",
@@ -330,6 +338,10 @@ fn env_defaults(cfg: &Config) -> Vec<(String, String)> {
             "ota_begin_interval_ms".into(),
             cfg.ota_begin_interval_ms.to_string(),
         ),
+        (
+            "ota_end_timeout_ms".into(),
+            cfg.ota_end_timeout_ms.to_string(),
+        ),
         // 与 UPS_SITE_TITLE 同一模式：只在首次建库时播种，之后以页面设置为准。
         // 英文部署可以不进后台直接 UPS_LANGUAGE=en-US。
         ("language".into(), env_or("UPS_LANGUAGE", DEFAULT_LANG)),
@@ -346,6 +358,7 @@ fn default_for(key: &str) -> String {
         "default_report_interval" => "30".into(),
         "site_title" => "UPS Sentinel".into(),
         "language" => DEFAULT_LANG.into(),
+        "ota_end_timeout_ms" => "5000".into(),
         _ => {
             for d in CATALOG {
                 if d.key == key {

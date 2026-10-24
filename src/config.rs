@@ -34,6 +34,9 @@ pub struct Config {
     /// OTA 开始阶段的应答窗口与重试间隔
     pub ota_begin_window_ms: u64,
     pub ota_begin_interval_ms: u64,
+    /// OTA 结束帧（`F`）应答超时。`F` 会触发设备校验并写 Flash、随后重启，
+    /// 比普通数据包慢得多；MDVR 参考实现给的是 5s，平台原来只给 3s，偏紧。
+    pub ota_end_timeout_ms: u64,
     pub admin_user: String,
     pub admin_password: String,
     pub casbin_model: PathBuf,
@@ -111,6 +114,7 @@ impl Config {
             ota_max_restarts: env_parse("UPS_OTA_MAX_RESTARTS", 2),
             ota_begin_window_ms: env_parse("UPS_OTA_BEGIN_WINDOW_MS", 3000),
             ota_begin_interval_ms: env_parse("UPS_OTA_BEGIN_INTERVAL_MS", 100),
+            ota_end_timeout_ms: env_parse("UPS_OTA_END_TIMEOUT_MS", 5000),
             admin_user: env_str("UPS_ADMIN_USER", "admin"),
             admin_password: env_str("UPS_ADMIN_PASSWORD", "admin123"),
             casbin_model: PathBuf::from(env_str("UPS_CASBIN_MODEL", "rbac/model.conf")),
