@@ -1958,13 +1958,15 @@ pub async fn ota_upload(
 
 #[derive(Deserialize)]
 pub struct OtaStartForm {
-    pub sn: String,
+    /// 目标设备。`/ota/start` 从表单取；`/ota/{sn}/start` 允许省略，此时用路径上的。
+    pub sn: Option<String>,
     pub firmware_id: String,
 }
 
 pub async fn ota_start(
     State(state): State<AppState>,
     user: AuthUser,
+    path: Option<Path<String>>,
     Form(form): Form<OtaStartForm>,
 ) -> Response {
     let t = Tr::from(state.settings.lang()).with_site(state.settings.str("site_title"));
@@ -1984,14 +1986,21 @@ pub async fn ota_start(
         .unwrap_or_else(|_| StatusCode::BAD_REQUEST.into_response())
         .into_response();
     }
-    if !can_see_device(&state, &user, &form.sn).await {
+    // Two routes share one handler: /ota/start takes sn from the form,
+    // /ota/{sn}/start may omit it in the form and falls back to the path.
+    let sn = form
+        .sn
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| path.map(|p| p.0))
+        .unwrap_or_default();
+    if sn.is_empty() {
         return toast_err(t.tr("cmd.err_dev_upgrade"));
     }
-    match state
-        .ota
-        .start(&form.sn, &form.firmware_id, &user.username)
-        .await
-    {
+    if !can_see_device(&state, &user, &sn).await {
+        return toast_err(t.tr("cmd.err_dev_upgrade"));
+    }
+    match state.ota.start(&sn, &form.firmware_id, &user.username).await {
         Ok(job_id) => redirect_with_flash(
             "/ota",
             &t.trf("flash.ota_started", &[("id", job_id[..8.min(job_id.len())].to_string())]),
