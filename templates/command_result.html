@@ -2,3 +2,13 @@
   <div class="toast-line">{{ message }}</div>
   {% if !detail.is_empty() %}<div class="toast-detail mono">{{ detail }}</div>{% endif %}
 </div>
+{% if refresh %}
+{#- 设置类命令成功后，把面板上"跟着变"的四处就地换掉（htmx out-of-band swap）。
+    不这么做的话，把上报间隔改成 10s，抬头和参数框还写着 30s，用户会以为没生效。
+    只用 span/input 这类任意位置都合法的元素，避免 <dd> 在解析时被丢弃。 -#}
+<span id="dev-meta" class="muted" hx-swap-oob="true">{% include "_dev_meta.html" %}</span>
+<span id="kv-address" hx-swap-oob="true">{{ address }}</span>
+<span id="kv-interval" hx-swap-oob="true">{{ report_interval }}</span>
+<input id="param-address" name="value" type="number" min="0" max="247" value="{{ address }}" required hx-swap-oob="true">
+<input id="param-interval" name="value" type="number" min="1" max="3600" value="{{ report_interval }}" required hx-swap-oob="true">
+{% endif %}

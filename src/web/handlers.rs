@@ -436,20 +436,36 @@ struct ToastTemplate {
 
 /// 设备命令的结果提示：第一行「已下发」，第二行是设备应答或超时。
 /// 单独一个模板而不是复用 toast——只有命令这里需要第二行。
+///
+/// `refresh` 为真时，响应里额外带几段 `hx-swap-oob` 片段，把面板抬头那行
+/// （地址 / 波特率 / 上报间隔）和参数表单里的当前值就地刷新掉。否则用户设完
+/// 10 秒，抬头还写着 30s，得手动刷页面才对——这正是之前被吐槽的现象。
 #[derive(Template)]
 #[template(path = "command_result.html")]
 struct CommandResult {
     ok: bool,
     message: String,
     detail: String,
+    t: Tr,
+    refresh: bool,
+    mdvr_id: String,
+    address: i64,
+    baudrate: i64,
+    report_interval: i64,
 }
 
 impl CommandResult {
-    fn err(message: impl Into<String>) -> Self {
+    fn err(t: &Tr, message: impl Into<String>) -> Self {
         Self {
             ok: false,
             message: message.into(),
             detail: String::new(),
+            t: t.clone(),
+            refresh: false,
+            mdvr_id: String::new(),
+            address: 0,
+            baudrate: 0,
+            report_interval: 0,
         }
     }
 
@@ -1488,21 +1504,24 @@ pub async fn device_command(
     // 下发命令必须用设备**当前**的串口地址：设备执行过 `d`（设置地址）后会改用
     // 新地址收发，平台若仍按默认地址 0 发送，设备一律收不到（查询版本、重启、
     // 设置类命令全部失效）。地址只来自库里的 devices.address。
-    let addr = state
-        .store
-        .device(&sn)
-        .await
-        .ok()
-        .flatten()
+    let dev = state.store.device(&sn).await.ok().flatten();
+    let addr = dev
+        .as_ref()
         .map(|d| d.address.clamp(0, 247) as u8)
         .unwrap_or(codec::DEFAULT_ADDRESS);
     let frame = match build_command(&t, &form, addr) {
         Ok(f) => f,
-        Err(e) => return CommandResult::err(e).render_response(),
+        Err(e) => return CommandResult::err(&t, e).render_response(),
     };
     // 设置地址的载荷就是新地址，发送成功后要记住它，后续命令才会发往新地址。
     let new_addr = if form.action == "set_address" {
         frame.payload.first().copied()
+    } else {
+        None
+    };
+    // 推送频率同样要落库（`a` 帧不带这个字段，平台没别的途径学到它）。
+    let new_interval = if form.action == "set_interval" && frame.payload.len() == 2 {
+        Some(u16::from_be_bytes([frame.payload[0], frame.payload[1]]) as i64)
     } else {
         None
     };
@@ -1525,25 +1544,52 @@ pub async fn device_command(
                 state.store.update_address(&sn, a as i64);
             }
             // 等设备回话：收到就把应答渲染成第二行，超时则提示发送超时。
-            let (detail, got_reply) = match rx.as_mut() {
+            let (detail, got_reply, ack_code) = match rx.as_mut() {
                 Some(rx) => match tokio::time::timeout(CMD_RESPONSE_TIMEOUT, rx.recv()).await {
-                    Ok(Some(reply)) => (format_reply(&t, &reply), true),
-                    _ => (t.tr("cmd.timeout").to_string(), false),
+                    Ok(Some(reply)) => {
+                        (format_reply(&t, &reply), true, codec::parse_ack(&reply.payload))
+                    }
+                    _ => (t.tr("cmd.timeout").to_string(), false, None),
                 },
-                None => (String::new(), true),
+                None => (String::new(), true, None),
             };
             state.commands.unregister(&sn);
+
+            // 设备确认成功才落库：超时说明没收到确认，重试/Flash 失败说明设备没接受，
+            // 这两种情况都不能改本地记录，否则面板会显示一个设备上并不存在的值。
+            let confirmed = ack_code == Some(ack::CONTINUE) || (got_reply && ack_code.is_none());
+            let interval_applied = new_interval.filter(|_| confirmed);
+            if let Some(secs) = interval_applied {
+                state.store.update_report_interval(&sn, secs);
+            }
+            // 有值真的变了才让页面就地刷新（地址乐观写库，频率确认后写库）。
+            let refresh = new_addr.is_some() || interval_applied.is_some();
+
+            // 刷新后的参数：改成功的用新值，其余沿用库里的旧值。
+            let address = new_addr
+                .map(i64::from)
+                .or_else(|| dev.as_ref().map(|d| d.address))
+                .unwrap_or_default();
+            let report_interval = interval_applied
+                .or_else(|| dev.as_ref().map(|d| d.report_interval))
+                .unwrap_or_default();
             CommandResult {
                 // 超时不算成功：整块标红，让用户一眼看到没收到应答
                 ok: got_reply,
                 message: format!("{label}{}", t.tr("cmd.sent")),
                 detail,
+                t: t.clone(),
+                refresh,
+                mdvr_id: dev.as_ref().map(|d| d.mdvr_id.clone()).unwrap_or_default(),
+                address,
+                baudrate: dev.as_ref().map(|d| d.baudrate).unwrap_or_default(),
+                report_interval,
             }
             .render_response()
         }
         Err(e) => {
             state.commands.unregister(&sn);
-            CommandResult::err(e.to_string()).render_response()
+            CommandResult::err(&t, e.to_string()).render_response()
         }
     }
 }

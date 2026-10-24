@@ -276,6 +276,10 @@ enum Cmd {
         sn: String,
         address: i64,
     },
+    UpdateReportInterval {
+        sn: String,
+        secs: i64,
+    },
     CreateJob(NewJob),
     UpdateJob {
         id: String,
@@ -428,6 +432,15 @@ impl Store {
         let _ = self.tx.send(Cmd::UpdateAddress {
             sn: sn.to_string(),
             address,
+        });
+    }
+
+    /// 记住设备当前的数据推送频率（秒）。`a` 状态帧里不带这个字段，平台没有别的
+    /// 途径学到它，所以下发 `f` 且设备确认成功后必须自己写库，否则面板永远显示旧值。
+    pub fn update_report_interval(&self, sn: &str, secs: i64) {
+        let _ = self.tx.send(Cmd::UpdateReportInterval {
+            sn: sn.to_string(),
+            secs,
         });
     }
 
@@ -970,6 +983,14 @@ impl WriterState {
                     params![address, Utc::now().timestamp_millis(), sn],
                 ) {
                     tracing::error!(error = %e, sn = %sn, "更新设备地址失败");
+                }
+            }
+            Cmd::UpdateReportInterval { sn, secs } => {
+                if let Err(e) = self.conn.execute(
+                    "UPDATE devices SET report_interval = ?, updated_at_ms = ? WHERE sn = ?",
+                    params![secs, Utc::now().timestamp_millis(), sn],
+                ) {
+                    tracing::error!(error = %e, sn = %sn, "更新上报间隔失败");
                 }
             }
             Cmd::MigrateDeviceSn { old_sn, new_sn } => {
@@ -2235,6 +2256,47 @@ mod tests {
             })
             .unwrap();
         assert_eq!(addr, 7, "重连不能覆盖已学到的设备地址");
+    }
+
+    /// 下发 `f`（推送频率）后要落库：`a` 状态帧不带这个字段，平台没有别的途径
+    /// 学到它，不写库面板就一直显示 30s，用户改成 10s 后看到旧值会以为没生效。
+    /// 同时重连也不能把它冲回默认值（同 address 的老坑）。
+    #[test]
+    fn report_interval_survives_reconnect() {
+        let mut state = test_state();
+        state
+            .apply_device_batch(&[meta("UPS-1", "MDVR-A")], &[])
+            .unwrap();
+
+        state.handle(Cmd::UpdateReportInterval {
+            sn: "UPS-1".into(),
+            secs: 10,
+        });
+
+        let secs: i64 = state
+            .conn
+            .query_row(
+                "SELECT report_interval FROM devices WHERE sn = 'UPS-1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(secs, 10, "UpdateReportInterval 应写入 devices.report_interval");
+
+        // 重连时 ingest 仍带平台默认 30s 走 upsert，不能把设备上的 10s 冲掉
+        state
+            .apply_device_batch(&[meta("UPS-1", "MDVR-A")], &[])
+            .unwrap();
+
+        let secs: i64 = state
+            .conn
+            .query_row(
+                "SELECT report_interval FROM devices WHERE sn = 'UPS-1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(secs, 10, "重连不能覆盖已设置的上报间隔");
     }
 
     /// 事务中途失败必须整批回滚，不能留下半截接入记录。

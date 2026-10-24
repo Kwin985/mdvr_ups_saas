@@ -2,7 +2,9 @@
   <div class="panel">
     <div class="panel-head">
       <h3 class="mono">{{ sn }}</h3>
-      <span class="muted">{{ t.tr("panel.link_tip") }} {{ mdvr_id }} · {{ t.tr("panel.serial_tip") }} {{ address }} · {{ t.tr("panel.baud_tip") }} {{ baudrate }} bps · {{ t.tr("panel.report_tip") }} {{ report_interval }}s</span>
+      {# 抬头这行会在命令成功后由 command_result.html 用 hx-swap-oob 就地替换，
+         所以正文抽成 _dev_meta.html 共用，避免两处文案漂移。 #}
+      <span id="dev-meta" class="muted">{% include "_dev_meta.html" %}</span>
       {% if can_ota %}<a class="btn primary small" href="/ota?sn={{ sn }}" style="margin-left:auto">{{ t.tr("panel.start_ota") }}</a>{% endif %}
     </div>
     {% include "device_live.html" %}
@@ -60,7 +62,7 @@
         <form class="param-row" hx-post="/devices/{{ sn }}/command" hx-target="#cmd-result" hx-swap="innerHTML" hx-disabled-elt="find button">
           <input type="hidden" name="action" value="set_address">
           <span class="param-label">{{ t.tr("panel.param_address") }}</span>
-          <input name="value" type="number" min="0" max="247" value="{{ address }}" required>
+          <input id="param-address" name="value" type="number" min="0" max="247" value="{{ address }}" required>
           <button class="btn primary" type="submit">{{ t.tr("panel.param_set") }}</button>
         </form>
         {# 波特率暂不开放：MDVR 透传不跟随 UPS 的波特率变化，一改就断链。
@@ -76,7 +78,7 @@
           <input type="hidden" name="action" value="set_interval">
           <span class="param-label">{{ t.tr("panel.param_interval") }}</span>
           <div class="param-suffix">
-            <input name="value" type="number" min="1" max="3600" value="{{ report_interval }}" required>
+            <input id="param-interval" name="value" type="number" min="1" max="3600" value="{{ report_interval }}" required>
             <span>{{ t.tr("panel.param_seconds") }}</span>
           </div>
           <button class="btn primary" type="submit">{{ t.tr("panel.param_set") }}</button>
@@ -99,9 +101,9 @@
       <dt>{{ t.tr("panel.kv_owner") }}</dt><dd>{{ owner_label }}</dd>
       <dt>{{ t.tr("panel.kv_group") }}</dt><dd>{{ group_name }}</dd>
       <dt>{{ t.tr("panel.kv_firmware") }}</dt><dd class="mono">{{ firmware }}</dd>
-      <dt>{{ t.tr("panel.kv_address") }}</dt><dd>{{ address }}</dd>
+      <dt>{{ t.tr("panel.kv_address") }}</dt><dd><span id="kv-address">{{ address }}</span></dd>
       <dt>{{ t.tr("panel.kv_baudrate") }}</dt><dd>{{ baudrate }} bps</dd>
-      <dt>{{ t.tr("panel.kv_interval") }}</dt><dd>{{ report_interval }} s</dd>
+      <dt>{{ t.tr("panel.kv_interval") }}</dt><dd><span id="kv-interval">{{ report_interval }}</span> s</dd>
     </dl>
   </div>
 
