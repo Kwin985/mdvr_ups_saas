@@ -751,6 +751,7 @@ pub async fn analysis_page(
             tick_decimals: Some(0),
             step: false,
             fixed_range: Some((0.0, 100.0)),
+            axis_floor: None,
         },
         &chart_events,
         t.tr("analysis.no_data"),
@@ -765,6 +766,7 @@ pub async fn analysis_page(
                 tick_decimals: None,
                 step: false,
                 fixed_range: None,
+                axis_floor: Some(0.0), // 电压不为负：下界钳到 0
             },
             Series {
                 label: t.tr("analysis.output_v").into(),
@@ -774,6 +776,7 @@ pub async fn analysis_page(
                 tick_decimals: None,
                 step: false,
                 fixed_range: None,
+                axis_floor: Some(0.0),
             },
         ],
         &[],
@@ -789,6 +792,7 @@ pub async fn analysis_page(
             tick_decimals: Some(0),
             step: true,
             fixed_range: None,
+            axis_floor: None, // 温度可为负，不钳制
         },
         t.tr("analysis.no_data"),
     );
@@ -1199,8 +1203,8 @@ pub async fn device_panel(
     let battery_points: Vec<(i64, f64)> =
         buckets.iter().map(|b| (b.ts_ms, b.avg_battery)).collect();
     let temp_points: Vec<(i64, f64)> = buckets.iter().map(|b| (b.ts_ms, b.avg_temp)).collect();
-    let voltage_points: Vec<(i64, f64)> =
-        buckets.iter().map(|b| (b.ts_ms, b.avg_input)).collect();
+    let input_points: Vec<(i64, f64)> = buckets.iter().map(|b| (b.ts_ms, b.avg_input)).collect();
+    let output_points: Vec<(i64, f64)> = buckets.iter().map(|b| (b.ts_ms, b.avg_output)).collect();
 
     let jobs = state
         .store
@@ -1296,9 +1300,11 @@ pub async fn device_panel(
                 unit: "%".into(),
                 color: "#4fc3f7".into(),
                 points: battery_points,
-                tick_decimals: None,
+                // 电量为整数百分比：整刻度 + 固定 0~100，避免小数与自动缩放
+                tick_decimals: Some(0),
                 step: false,
-                fixed_range: None,
+                fixed_range: Some((0.0, 100.0)),
+                axis_floor: None,
             },
             t.tr("chart.empty_battery"),
         ),
@@ -1312,19 +1318,36 @@ pub async fn device_panel(
                 tick_decimals: Some(0),
                 step: true,
                 fixed_range: None,
+                axis_floor: None, // 温度可为负，不钳制
             },
             t.tr("chart.empty_temp"),
         ),
-        voltage_chart: chart::line_chart(
-            &Series {
-                label: t.tr("chart.voltage").into(),
-                unit: "V".into(),
-                color: "#2dd4bf".into(),
-                points: voltage_points,
-                tick_decimals: None,
-                step: false,
-                fixed_range: None,
-            },
+        // 电源电压 / UPS 电压同图对比：与「数据分析」页的电压图保持一致
+        // （同一组配色与标签，纵轴都从 0 起，两张图的刻度可横向对照）
+        voltage_chart: chart::line_chart_multi(
+            &[
+                Series {
+                    label: t.tr("analysis.input_v").into(),
+                    unit: "V".into(),
+                    color: "#059669".into(),
+                    points: input_points,
+                    tick_decimals: None,
+                    step: false,
+                    fixed_range: None,
+                    axis_floor: Some(0.0), // 电压纵轴从 0 起，不出现负刻度
+                },
+                Series {
+                    label: t.tr("analysis.output_v").into(),
+                    unit: "V".into(),
+                    color: "#1d4ed8".into(),
+                    points: output_points,
+                    tick_decimals: None,
+                    step: false,
+                    fixed_range: None,
+                    axis_floor: Some(0.0),
+                },
+            ],
+            &[],
             t.tr("chart.empty_voltage"),
         ),
         jobs,
@@ -1469,9 +1492,11 @@ pub async fn history_partial(
                 unit: "%".into(),
                 color: "#4fc3f7".into(),
                 points,
-                tick_decimals: None,
+                // 电量为整数百分比：整刻度 + 固定 0~100
+                tick_decimals: Some(0),
                 step: false,
-                fixed_range: None,
+                fixed_range: Some((0.0, 100.0)),
+                axis_floor: None,
             },
             t.tr("chart.empty_window"),
         ),

@@ -16,6 +16,9 @@ pub struct Series {
     pub step: bool,
     /// 固定纵轴范围（如电量恒为 0~100%）；`None` = 按数据自动外扩。
     pub fixed_range: Option<(f64, f64)>,
+    /// 纵轴下界（强制）。电压这类物理量最低就是 0，纵轴一律从 0 起：
+    /// 既不会外扩出负刻度，也让 0 这条基线始终留在视野里；`None` = 按数据自动。
+    pub axis_floor: Option<f64>,
 }
 
 /// 关键事件类型（电池曲线标注用）。
@@ -110,7 +113,11 @@ pub fn line_chart_multi(series: &[Series], events: &[ChartEvent], empty_hint: &s
                 .collect();
             (lo, hi, ticks)
         }
-        _ => axis_scale(dmin, dmax, if int_ticks { Some(0) } else { None }),
+        _ => {
+            // 多条序列共享纵轴时，取最严格的（最大）下限
+            let floor = series.iter().filter_map(|s| s.axis_floor).reduce(f64::max);
+            axis_scale(dmin, dmax, if int_ticks { Some(0) } else { None }, floor)
+        }
     };
     let span = hi - lo;
 
@@ -314,8 +321,15 @@ fn split_segments(points: &[(i64, f64)]) -> Vec<(usize, usize)> {
 
 /// 纵轴范围与刻度值。
 /// * `tick_decimals == Some(0)`：整数刻度——步长取整（≥1），范围对齐到 4 等分；
+/// * `floor` 有值：下界**强制**为该值（电压恒从 0 起），上界吸附到整步长，
+///   避免出现 16.35 这种别扭的顶刻度；
 /// * 其他：数据范围外扩 12%，均分 5 档（保持原行为）。
-fn axis_scale(min: f64, max: f64, tick_decimals: Option<u32>) -> (f64, f64, Vec<f64>) {
+fn axis_scale(
+    min: f64,
+    max: f64,
+    tick_decimals: Option<u32>,
+    floor: Option<f64>,
+) -> (f64, f64, Vec<f64>) {
     if tick_decimals == Some(0) {
         let (lo, hi, step) = integer_axis(min, max);
         let mut ticks = Vec::new();
@@ -327,10 +341,64 @@ fn axis_scale(min: f64, max: f64, tick_decimals: Option<u32>) -> (f64, f64, Vec<
         return (lo, hi, ticks);
     }
     let pad = (max - min) * 0.12;
-    let (lo, hi) = (min - pad, max + pad);
+    let mut lo = min - pad;
+    let mut hi = max + pad;
+    if let Some(f) = floor {
+        lo = f;
+        if hi <= lo {
+            hi = lo + 1.0;
+        }
+        // 顶刻度吸附到整步长：约 4 等分，实际 4~5 格
+        let step = nice_step((hi - lo) / 4.0);
+        let n = ((hi - lo) / step).ceil().max(1.0);
+        hi = lo + step * n;
+        // 自下而上生成，保证下界是精确的 0（避免 -0 这种刻度文案）
+        let mut ticks: Vec<f64> = (0..=n as usize).map(|k| lo + step * k as f64).collect();
+        ticks.reverse();
+        return (lo, hi, ticks);
+    }
+    if hi <= lo {
+        hi = lo + 1.0;
+    }
     let span = hi - lo;
     let ticks = (0..=4).map(|k| hi - span * (k as f64 / 4.0)).collect();
     (lo, hi, ticks)
+}
+
+/// 把步长吸附到 1 / 1.2 / 1.5 / 2 / 2.5 / 3 / 4 / 5 / 6 / 8 / 10 × 10^n，
+/// 让刻度落在整数或半整数上。档位偏密是为了避免 58 这种跨度直接跳到 100
+/// （220V 市电只剩 3 格），保证纵轴始终有 4~5 条网格线。
+fn nice_step(raw: f64) -> f64 {
+    if !(raw > 0.0) || !raw.is_finite() {
+        return 1.0;
+    }
+    let exp = raw.log10().floor();
+    let base = 10f64.powf(exp);
+    let n = raw / base; // [1, 10)
+    let m = if n <= 1.0 {
+        1.0
+    } else if n <= 1.2 {
+        1.2
+    } else if n <= 1.5 {
+        1.5
+    } else if n <= 2.0 {
+        2.0
+    } else if n <= 2.5 {
+        2.5
+    } else if n <= 3.0 {
+        3.0
+    } else if n <= 4.0 {
+        4.0
+    } else if n <= 5.0 {
+        5.0
+    } else if n <= 6.0 {
+        6.0
+    } else if n <= 8.0 {
+        8.0
+    } else {
+        10.0
+    };
+    m * base
 }
 
 /// 整数刻度：步长 = ceil(跨度/4) 且 ≥1；把 [floor(min), ceil(max)] 向外扩到
@@ -358,7 +426,8 @@ fn format_tick(v: f64, tick_decimals: Option<u32>) -> String {
 }
 
 pub fn format_value(v: f64) -> String {
-    if v.abs() >= 100.0 {
+    if v.abs() >= 100.0 || (v - v.round()).abs() < 1e-9 {
+        // 大数或整数值：不显示多余小数（0 / 5 / 10 而不是 0.0 / 5.0 / 10.0）
         format!("{v:.0}")
     } else {
         format!("{v:.1}")
@@ -385,6 +454,7 @@ mod tests {
             tick_decimals: None,
             step: false,
             fixed_range: None,
+            axis_floor: None,
         }
     }
 
@@ -407,7 +477,7 @@ mod tests {
     #[test]
     fn integer_axis_uses_whole_degrees() {
         // 61.0~61.9 的窄带也要给出整度刻度：60,61,62,63,64
-        let (lo, hi, ticks) = axis_scale(61.02, 61.98, Some(0));
+        let (lo, hi, ticks) = axis_scale(61.02, 61.98, Some(0), None);
         assert_eq!((lo, hi), (60.0, 64.0));
         assert_eq!(ticks, vec![60.0, 61.0, 62.0, 63.0, 64.0]);
     }
@@ -415,7 +485,7 @@ mod tests {
     #[test]
     fn integer_axis_scales_up_for_wide_range() {
         // 55.3~64.8 → 步长 3，范围对齐 4 等分
-        let (lo, hi, ticks) = axis_scale(55.3, 64.8, Some(0));
+        let (lo, hi, ticks) = axis_scale(55.3, 64.8, Some(0), None);
         assert_eq!(ticks.first(), Some(&54.0));
         assert_eq!(ticks.last(), Some(&66.0));
         assert!(ticks.iter().all(|t| t.fract() == 0.0));
@@ -425,9 +495,58 @@ mod tests {
 
     #[test]
     fn auto_axis_keeps_decimals_for_fractional_data() {
-        let (lo, hi, ticks) = axis_scale(10.30, 10.46, None);
+        let (lo, hi, ticks) = axis_scale(10.30, 10.46, None, None);
         assert_eq!(ticks.len(), 5);
         assert!(lo < 10.30 && hi > 10.46);
+    }
+
+    #[test]
+    fn axis_floor_clamps_negative_voltage() {
+        // 电压数据含 0 时，自动外扩会下探到负值；floor=0 应把下界钳到 0，
+        // 且上界吸附到整步长（16.35 → 20），刻度 0/5/10/15/20。
+        let (lo, hi, ticks) = axis_scale(0.0, 14.6, None, Some(0.0));
+        assert_eq!(lo, 0.0);
+        assert!(ticks.iter().all(|t| *t >= 0.0), "不应出现负刻度: {ticks:?}");
+        assert_eq!(ticks.last(), Some(&0.0));
+        assert_eq!(hi, 20.0);
+        assert_eq!(ticks, vec![20.0, 15.0, 10.0, 5.0, 0.0]);
+    }
+
+    #[test]
+    fn axis_floor_forces_zero_base_for_high_voltage() {
+        // 电压图纵轴一律从 0 起：210~230 的市电数据也要给出 0 刻度，
+        // 且顶刻度吸附到整步长（232.4 → 240），网格 4~5 格。
+        let (lo, hi, ticks) = axis_scale(210.0, 230.0, None, Some(0.0));
+        assert_eq!(lo, 0.0);
+        assert_eq!(ticks.last(), Some(&0.0), "最低刻度必须是 0: {ticks:?}");
+        assert!(hi >= 230.0, "顶刻度不能压住数据: {hi}");
+        assert!(
+            (4..=6).contains(&ticks.len()),
+            "刻度数量应保持在 4~6 条: {ticks:?}"
+        );
+        assert!(
+            ticks.windows(2).all(|w| w[0] > w[1]),
+            "刻度应自顶向下递减: {ticks:?}"
+        );
+    }
+
+    #[test]
+    fn axis_floor_keeps_zero_exact_without_negative_zero_label() {
+        // 浮点误差不能把最低刻度算成 -0.0000001（会被格式化成 "-0"）
+        let (lo, _, ticks) = axis_scale(11.8, 12.6, None, Some(0.0));
+        assert_eq!(lo, 0.0);
+        assert_eq!(ticks.last().copied(), Some(0.0));
+        assert!(
+            ticks.iter().all(|t| t.is_sign_positive()),
+            "不应出现 -0 刻度: {ticks:?}"
+        );
+    }
+
+    #[test]
+    fn integral_ticks_drop_trailing_zero() {
+        assert_eq!(format_value(0.0), "0");
+        assert_eq!(format_value(5.0), "5");
+        assert_eq!(format_value(10.1), "10.1");
     }
 
     #[test]
@@ -507,6 +626,7 @@ mod tests {
             tick_decimals: Some(0),
             step: true,
             fixed_range: None,
+            axis_floor: None,
         };
         let svg = line_chart(&s, "暂无数据");
         let line = line_path(&svg);
