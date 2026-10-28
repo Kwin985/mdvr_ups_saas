@@ -63,12 +63,6 @@ fn fallback_identity(peer: SocketAddr) -> (String, String) {
     )
 }
 
-fn is_fallback_sn(sn: &str) -> bool {
-    sn.strip_prefix("UPS-")
-        .and_then(|rest| rest.parse::<std::net::Ipv4Addr>().ok())
-        .is_some()
-}
-
 impl Ingest {
     pub async fn serve(self, listener: TcpListener) {
         loop {
@@ -139,16 +133,26 @@ impl Ingest {
         ));
 
         self.registry.register(handle.clone()).await;
-        self.store.upsert_device(DeviceMeta {
-            sn: initial_sn.clone(),
-            mdvr_id: mdvr_id.clone(),
-            address: codec::DEFAULT_ADDRESS as i64,
-            baudrate: 9600,
-            report_interval: self.settings.i64("default_report_interval", 30),
-            firmware_version: String::new(),
-            config_json: "{}".into(),
-        });
-        self.store.set_online(&initial_sn, true);
+        // 只有拿到**可信身份**的连接才立即落库。
+        //
+        // 接入端口 1688 是公网裸 TCP，每天有大量扫描器连进来又什么都不发。
+        // 以前在连接建立时就 upsert，于是设备树被 `UPS-<扫描器IP>` 灌满
+        // （实测一夜 16 条）。回退身份现在只留在内存注册表里，
+        // 等首个**合法** 'a' 帧到达才入库（见 `handle_frame`）。
+        let mut persisted = false;
+        if !codec::is_fallback_sn(&initial_sn) {
+            self.store.upsert_device(DeviceMeta {
+                sn: initial_sn.clone(),
+                mdvr_id: mdvr_id.clone(),
+                address: codec::DEFAULT_ADDRESS as i64,
+                baudrate: 9600,
+                report_interval: self.settings.i64("default_report_interval", 30),
+                firmware_version: String::new(),
+                config_json: "{}".into(),
+            });
+            self.store.set_online(&initial_sn, true);
+            persisted = true;
+        }
 
         // 注册应答（可选，MDVR 可忽略）
         let ack = Frame::new(0x01, cmd::REGISTER, b"OK".to_vec()).encode();
@@ -196,8 +200,16 @@ impl Ingest {
         let idle = Duration::from_secs(self.settings.u64("idle_timeout_secs", 180).max(30));
 
         if !hs.leftover.is_empty() {
-            self.handle_bytes(&mut parser, &hs.leftover, &mut sn, &mut dev_addr, conn_id)
-                .await;
+            self.handle_bytes(
+                &mut parser,
+                &hs.leftover,
+                &mut sn,
+                &mut dev_addr,
+                conn_id,
+                &mdvr_id,
+                &mut persisted,
+            )
+            .await;
         }
 
         loop {
@@ -216,8 +228,16 @@ impl Ingest {
             self.metrics
                 .bytes_in
                 .fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
-            self.handle_bytes(&mut parser, &buf[..n], &mut sn, &mut dev_addr, conn_id)
-                .await;
+            self.handle_bytes(
+                &mut parser,
+                &buf[..n],
+                &mut sn,
+                &mut dev_addr,
+                conn_id,
+                &mdvr_id,
+                &mut persisted,
+            )
+            .await;
             if let Some(h) = self.registry.get(&sn).await {
                 h.touch();
                 *h.parser_stats.lock().unwrap() = parser.stats;
@@ -226,7 +246,9 @@ impl Ingest {
 
         writer_task.abort();
         let removed = self.registry.unregister(&sn, conn_id).await;
-        if removed {
+        // 没入库的连接（扫描器/空连接）不要写在线状态，否则会在 devices 里
+        // 凭空 UPDATE 出一次 last_seen 变化
+        if removed && persisted {
             self.store.set_online(&sn, false);
             self.ota.on_device_offline(&sn).await;
         }
@@ -234,6 +256,7 @@ impl Ingest {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn handle_bytes(
         &self,
         parser: &mut FrameParser,
@@ -241,6 +264,8 @@ impl Ingest {
         sn: &mut String,
         dev_addr: &mut Option<u8>,
         conn_id: Uuid,
+        mdvr_id: &str,
+        persisted: &mut bool,
     ) {
         for event in parser.feed(data) {
             match event {
@@ -248,7 +273,8 @@ impl Ingest {
                     self.metrics
                         .frames_total
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    self.handle_frame(frame, sn, dev_addr, conn_id).await;
+                    self.handle_frame(frame, sn, dev_addr, conn_id, mdvr_id, persisted)
+                        .await;
                 }
                 ParseEvent::Invalid(err) => {
                     self.metrics
@@ -260,12 +286,15 @@ impl Ingest {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn handle_frame(
         &self,
         frame: Frame,
         sn: &mut String,
         dev_addr: &mut Option<u8>,
         conn_id: Uuid,
+        mdvr_id: &str,
+        persisted: &mut bool,
     ) {
         // 先把帧交给命令应答总线：web 端下发命令后可能在等这一帧（版本/应答）。
         // 匹配由总线按期望命令字判断，不会把周期性的 `a` 帧误投给等待者。
@@ -293,14 +322,21 @@ impl Ingest {
                     // 设备 SN 未写入时 'a' 帧的 SN 字段是 20 个空格；
                     // 回退身份期间首次拿到真实 SN 就整体重绑（含历史样本），
                     // 正式注册的 SN 不一致时只提示、不擅自改绑定。
-                    if !st.sn.is_empty() && st.sn != *sn {
-                        if is_fallback_sn(sn)
+                    if !st.sn.is_empty() && st.sn != *sn && codec::is_valid_identity(&st.sn) {
+                        if codec::is_fallback_sn(sn)
                             && self.registry.rebind(sn, &st.sn, conn_id).await
                         {
-                            self.store.migrate_device_sn(sn, &st.sn);
+                            // 只有占位身份**真的入过库**才需要迁移。
+                            // 现在回退身份在首个合法帧之前不入库，此时库里可能
+                            // 已经有这台设备的正式行（含归属、改过的地址/上报间隔）；
+                            // 迁移会先 `DELETE` 同名正式行，反而把这些配置清掉。
+                            if *persisted {
+                                self.store.migrate_device_sn(sn, &st.sn);
+                            }
                             tracing::info!(
                                 old = %sn,
                                 new = %st.sn,
+                                persisted = *persisted,
                                 "设备上报真实 SN，占位身份已重绑"
                             );
                             *sn = st.sn.clone();
@@ -311,6 +347,29 @@ impl Ingest {
                                 "'a' 帧携带的 SN 与注册 SN 不一致"
                             );
                         }
+                    } else if !st.sn.is_empty() && st.sn != *sn {
+                        // 随机字节流蒙对校验码时这里会读出一串乱码，必须丢弃
+                        tracing::debug!(
+                            sn = %sn,
+                            frame_sn = %st.sn,
+                            "'a' 帧 SN 非法（疑似乱码/随机字节），已忽略"
+                        );
+                    }
+                    // 首个**合法**状态帧才把设备落库：走到这里说明对面确实是台 UPS，
+                    // 扫描器连接（无数据 / 垃圾数据）永远不会在设备树里留下记录。
+                    if !*persisted && codec::is_valid_identity(&*sn) {
+                        self.store.upsert_device(DeviceMeta {
+                            sn: sn.clone(),
+                            mdvr_id: mdvr_id.to_string(),
+                            address: frame.address as i64,
+                            baudrate: 9600,
+                            report_interval: self.settings.i64("default_report_interval", 30),
+                            firmware_version: String::new(),
+                            config_json: "{}".into(),
+                        });
+                        self.store.set_online(sn, true);
+                        *persisted = true;
+                        tracing::info!(sn = %sn, mdvr = %mdvr_id, "首次收到合法状态帧，设备入库");
                     }
                     self.store
                         .insert_samples(vec![Sample::from_status_a(sn, ts, &st, frame.encode())]);
@@ -494,16 +553,20 @@ async fn probe_registration(
 /// * 状态帧 `a` → 载荷里带真实 SN，`mdvr_id` 缺失（由调用方按 IP 补）；
 /// * 其它帧 / 载荷解析失败 / SN 为空白 → 全 `None`，走 IP 回退身份。
 fn identity_from_frame(f: &Frame) -> (Option<String>, Option<String>) {
+    // 身份一律过合法性校验：公网裸 TCP 上，扫描器的随机字节流可能被误判成
+    // 注册帧/状态帧，`from_utf8_lossy` 会产出一串乱码身份。
+    let ok = |s: String| codec::is_valid_identity(&s).then_some(s);
     match f.command {
         cmd::REGISTER => match codec::parse_registration(&f.payload) {
-            Ok((mdvr_id, sn)) => (Some(mdvr_id), Some(sn)),
+            Ok((mdvr_id, sn)) => (ok(mdvr_id), ok(sn)),
             Err(_) => (None, None),
         },
         cmd::STATUS_A => {
             let sn = StatusA::parse(&f.payload)
                 .ok()
                 .map(|st| st.sn)
-                .filter(|s| !s.is_empty());
+                .filter(|s| !s.is_empty())
+                .and_then(ok);
             (None, sn)
         }
         _ => (None, None),
@@ -522,15 +585,19 @@ fn parse_registration_line(line: &str) -> Result<(String, String)> {
             .or_else(|| v.get("sn"))
             .and_then(|x| x.as_str())
             .ok_or_else(|| anyhow!("缺少 ups_sn"))?;
+        if !codec::is_valid_identity(mdvr) || !codec::is_valid_identity(sn) {
+            return Err(anyhow!("注册字段非法"));
+        }
         return Ok((mdvr.to_string(), sn.to_string()));
     }
     let (a, b) = line
         .split_once('|')
         .ok_or_else(|| anyhow!("注册行格式应为 MDVR_ID|UPS_SN"))?;
-    if a.trim().is_empty() || b.trim().is_empty() {
-        return Err(anyhow!("注册字段为空"));
+    let (a, b) = (a.trim(), b.trim());
+    if !codec::is_valid_identity(a) || !codec::is_valid_identity(b) {
+        return Err(anyhow!("注册字段为空或非法"));
     }
-    Ok((a.trim().to_string(), b.trim().to_string()))
+    Ok((a.to_string(), b.to_string()))
 }
 
 #[cfg(test)]
@@ -543,15 +610,15 @@ mod tests {
         let (mdvr, sn) = fallback_identity(peer);
         assert_eq!(mdvr, "MDVR-192.168.1.169");
         assert_eq!(sn, "UPS-192.168.1.169");
-        assert!(is_fallback_sn(&sn));
+        assert!(codec::is_fallback_sn(&sn));
     }
 
     #[test]
     fn fallback_sn_only_matches_ipv4_shape() {
-        assert!(is_fallback_sn("UPS-10.0.0.7"));
-        assert!(!is_fallback_sn("UPS-9001"));
-        assert!(!is_fallback_sn("ups-10.0.0.7"));
-        assert!(!is_fallback_sn("MDVR-10.0.0.7"));
+        assert!(codec::is_fallback_sn("UPS-10.0.0.7"));
+        assert!(!codec::is_fallback_sn("UPS-9001"));
+        assert!(!codec::is_fallback_sn("ups-10.0.0.7"));
+        assert!(!codec::is_fallback_sn("MDVR-10.0.0.7"));
     }
 
     #[test]
@@ -580,7 +647,21 @@ mod tests {
         assert_eq!(mdvr, None, "状态帧不携带 MDVR 标识，应由调用方按 IP 补齐");
         assert_eq!(sn.as_deref(), Some("UPS-9001"));
         // 真实 SN 不是占位身份，后续 'a' 帧不会再触发重绑/历史迁移
-        assert!(!is_fallback_sn(sn.as_deref().unwrap()));
+        assert!(!codec::is_fallback_sn(sn.as_deref().unwrap()));
+    }
+
+    /// 扫描器丢来的随机字节流可能蒙对转义与校验码，被当成状态帧解析；
+    /// SN 字段会是一串乱码（U+FFFD / 控制字符）。这种身份必须挡在入库之前，
+    /// 否则设备树里会长出一个乱码设备（线上曾出现过一条）。
+    #[test]
+    fn garbage_sn_in_status_frame_is_rejected() {
+        let mut payload = vec![0u8; codec::STATUS_A_LEN];
+        payload[8..28].copy_from_slice(&[
+            0xff, 0xfe, 0x00, 0x81, 0x44, 0x66, 0x07, 0x1b, 0x5e, 0x54, 0x92, 0x46, 0xa0, 0x9d,
+            0x5d, 0x0e, 0x8a, 0x3b, 0x4e, 0x01,
+        ]);
+        let frame = Frame::new(codec::DEFAULT_ADDRESS, cmd::STATUS_A, payload);
+        assert_eq!(identity_from_frame(&frame), (None, None));
     }
 
     /// 设备 SN 尚未写入时载荷里是 20 个空格，此时应回落到 IP 占位身份。

@@ -111,6 +111,34 @@ pub enum CodecError {
     InvalidVersion,
 }
 
+// ---------------------------------------------------------------- 身份合法性
+
+/// SN 上限长度。`a` 帧的 SN 字段只有 20 字节，注册行可能略长，留些余量。
+pub const SN_MAX_LEN: usize = 32;
+
+/// 设备标识（SN / MDVR_ID）是否可信。
+///
+/// 接入端口是公网裸 TCP，扫描器随手丢来的字节流一旦碰巧通过转义与异或校验，
+/// 就会被当成状态帧/注册帧解析，`from_utf8_lossy` 会把随机字节变成 U+FFFD、
+/// 控制字符和一堆乱码。这类"身份"必须挡在入库之前，否则设备树里会长出乱码设备。
+///
+/// 规则：非空、长度受限、全为可见 ASCII，且只允许字母/数字/`-`/`_`/`.`。
+pub fn is_valid_identity(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= SN_MAX_LEN
+        && s.bytes().all(|b| b.is_ascii_graphic())
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+/// 回退身份：`UPS-<IPv4>`。这是"探测窗口内没拿到真实身份"时的占位 SN，
+/// 不是设备真实 SN，只在**确实收到过合法业务帧**时才允许入库。
+pub fn is_fallback_sn(sn: &str) -> bool {
+    sn.strip_prefix("UPS-")
+        .and_then(|rest| rest.parse::<std::net::Ipv4Addr>().ok())
+        .is_some()
+}
+
 // ---------------------------------------------------------------- 注册（平台自定义）
 
 /// MDVR -> 平台注册载荷：`MDVR_ID|UPS_SN`（UTF-8）。
@@ -121,6 +149,9 @@ pub fn parse_registration(payload: &[u8]) -> Result<(String, String), CodecError
     let (mdvr, sn) = text.split_once('|').ok_or(CodecError::InvalidPayload)?;
     let (mdvr, sn) = (mdvr.trim(), sn.trim());
     if mdvr.is_empty() || sn.is_empty() {
+        return Err(CodecError::InvalidPayload);
+    }
+    if !is_valid_identity(mdvr) || !is_valid_identity(sn) {
         return Err(CodecError::InvalidPayload);
     }
     Ok((mdvr.to_string(), sn.to_string()))
@@ -520,5 +551,45 @@ mod tests {
         assert_eq!(baud_name(4), "9600");
         assert_eq!(baud_name(8), "115200");
         assert_eq!(interval_para(60), [0x00, 0x3C]);
+    }
+
+    #[test]
+    fn identity_accepts_real_sn() {
+        assert!(is_valid_identity("0123456789"));
+        assert!(is_valid_identity("UPS2024-0001"));
+        assert!(is_valid_identity("SN_001.A"));
+        assert!(is_valid_identity("MDVR-14.153.248.6"));
+    }
+
+    #[test]
+    fn identity_rejects_garbage_from_scanners() {
+        // 随机字节经 from_utf8_lossy 得到的替换符
+        assert!(!is_valid_identity("Df\r\u{6}~\u{17}^T\u{fffd}F\u{fffd}"));
+        assert!(!is_valid_identity(""));
+        assert!(!is_valid_identity("   "));
+        assert!(!is_valid_identity("含中文的SN"));
+        // 超过长度上限
+        assert!(!is_valid_identity(&"9".repeat(SN_MAX_LEN + 1)));
+        assert!(is_valid_identity(&"9".repeat(SN_MAX_LEN)));
+    }
+
+    #[test]
+    fn fallback_sn_detection() {
+        assert!(is_fallback_sn("UPS-10.0.0.7"));
+        assert!(!is_fallback_sn("UPS-9001"));
+        assert!(!is_fallback_sn("ups-10.0.0.7"));
+        assert!(!is_fallback_sn("MDVR-10.0.0.7"));
+    }
+
+    #[test]
+    fn registration_rejects_garbage_payload() {
+        // 乱码注册载荷不应产出身份（否则会生成乱码设备）
+        let garbage = b"\xff\xfe|??";
+        assert!(parse_registration(garbage).is_err());
+        assert!(parse_registration(b"mdvr|").is_err());
+        assert_eq!(
+            parse_registration(b"MDVR-1|0123456789").unwrap(),
+            ("MDVR-1".to_string(), "0123456789".to_string())
+        );
     }
 }

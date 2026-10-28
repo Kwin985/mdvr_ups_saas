@@ -132,16 +132,31 @@ async fn main() -> Result<()> {
     };
     tokio::spawn(ingest.serve(ingest_listener));
 
-    // 分区清理：启动后与每 6 小时（保留天数取系统设置，运行时可变）
+    // 分区清理 + 垃圾设备清理：启动时先跑一次，之后每 6 小时（天数取系统设置，运行时可变）
     {
         let store = store.clone();
         let settings = settings.clone();
         let cfg = cfg.clone();
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
                 let days = settings.i64("retention_days", cfg.retention_days);
-                store.clone().cleanup_with_days(days);
+                store.cleanup_with_days(days);
+                // 接入端口是公网裸 TCP，扫描器每天都在灌连接。回退身份（UPS-<IP>）、
+                // 乱码 SN、零样本僵尸行必须自动清，否则设备树越滚越脏。
+                let junk_days = settings.i64("junk_idle_days", 30);
+                match store.purge_junk(junk_days).await {
+                    Ok(r) if r.total() > 0 => tracing::info!(
+                        removed = r.total(),
+                        fallback = r.fallback,
+                        invalid = r.invalid,
+                        idle = r.idle,
+                        samples = r.samples,
+                        "清理垃圾设备完成"
+                    ),
+                    Ok(_) => tracing::debug!("没有需要清理的垃圾设备"),
+                    Err(e) => tracing::warn!(error = %e, "清理垃圾设备失败"),
+                }
+                tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
             }
         });
     }

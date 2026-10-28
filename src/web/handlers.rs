@@ -1731,6 +1731,12 @@ fn build_command(t: &Tr, form: &CommandForm, addr: u8) -> Result<Frame, String> 
             if sn.is_empty() || sn.len() > codec::STATUS_A_SN_LEN {
                 return Err(t.tr("cmd.err_sn").to_string());
             }
+            // 与接入侧同一套校验：设备之后在 `a` 帧里上报的 SN 若过不了
+            // `is_valid_identity`，平台就不会按它重绑，设备会一直挂在
+            // `UPS-<IP>` 下。与其让用户"写入成功但看不到"，不如在这里挡掉。
+            if !codec::is_valid_identity(sn) {
+                return Err(t.tr("cmd.err_sn_charset").to_string());
+            }
             let mut payload = vec![0x20u8; codec::STATUS_A_SN_LEN];
             payload[..sn.len()].copy_from_slice(sn.as_bytes());
             Frame::new(addr, cmd::SET_SN, payload)

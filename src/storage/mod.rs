@@ -16,7 +16,7 @@ use duckdb::{Connection, params};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::config::Config;
-use crate::protocol::StatusA;
+use crate::protocol::{StatusA, codec};
 
 /// 设备接入（幂等）：新设备插入，老设备刷新透传参数。
 /// 预编译后可在同一个事务里批量执行，避免逐条提交。
@@ -330,6 +330,11 @@ enum Cmd {
         keep_admin: String,
         reply: oneshot::Sender<Result<PurgeReport>>,
     },
+    /// 清理垃圾设备（回退身份 / 乱码 SN / 长期零样本的僵尸行）
+    PurgeJunk {
+        idle_days: i64,
+        reply: oneshot::Sender<Result<JunkReport>>,
+    },
     /// 写入/更新一条系统配置
     SettingSet {
         key: String,
@@ -369,6 +374,27 @@ pub struct PurgeReport {
     pub jobs: u64,
     pub audit: u64,
     pub users: u64,
+}
+
+/// 「清理垃圾设备」的结果，用于日志与运维核对。
+///
+/// 三类垃圾的来源：
+/// * `fallback`：`UPS-<IP>` 占位身份且从未产生过样本——公网扫描器连上就走的残骸；
+/// * `invalid`：SN 不合法的行——随机字节流被误解析成状态帧/注册帧时写进来的乱码；
+/// * `idle`：零样本且长期没有动静的僵尸行（兜底，默认 30 天）。
+#[derive(Debug, Default, Clone, Copy)]
+pub struct JunkReport {
+    pub fallback: u64,
+    pub invalid: u64,
+    pub idle: u64,
+    /// 连带删除的历史样本行数
+    pub samples: u64,
+}
+
+impl JunkReport {
+    pub fn total(&self) -> u64 {
+        self.fallback + self.invalid + self.idle
+    }
 }
 
 impl Store {
@@ -543,6 +569,21 @@ impl Store {
             })
             .map_err(|_| anyhow!("存储线程已退出"))?;
         rx.await.map_err(|_| anyhow!("清空任务被取消"))?
+    }
+
+    /// 清理垃圾设备：回退身份（`UPS-<IP>`）无样本、SN 非法、长期零样本的僵尸行。
+    ///
+    /// `idle_days`：零样本设备的静默天数阈值，`<= 0` 表示只清前两类。
+    /// 真实设备一定会持续产生样本，所以「零样本」是垃圾设备最可靠的判据。
+    pub async fn purge_junk(&self, idle_days: i64) -> Result<JunkReport> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(Cmd::PurgeJunk {
+                idle_days,
+                reply: tx,
+            })
+            .map_err(|_| anyhow!("存储线程已退出"))?;
+        rx.await.map_err(|_| anyhow!("清理任务被取消"))?
     }
 
     /// 持久化一条系统配置。
@@ -828,6 +869,14 @@ fn run_writer(
         let _ = ready.send(Err(e));
         return;
     }
+    // 进程刚起来，还没有任何设备连上来：把上一轮（可能被 kill -9 或断电）
+    // 残留的 online 标记清掉。否则这些行会永远显示"在线"，
+    // 而垃圾设备清理又因为 online=true 而漏掉它们。
+    match conn.execute("UPDATE devices SET online = false WHERE online = true", []) {
+        Ok(n) if n > 0 => tracing::info!(rows = n, "已重置上一轮残留的在线标记"),
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "重置在线标记失败"),
+    }
     let mut state = WriterState {
         conn,
         partitions: BTreeSet::new(),
@@ -1087,6 +1136,9 @@ impl WriterState {
             Cmd::Cleanup { retention_days } => self.cleanup(retention_days),
             Cmd::Purge { keep_admin, reply } => {
                 let _ = reply.send(self.purge(&keep_admin));
+            }
+            Cmd::PurgeJunk { idle_days, reply } => {
+                let _ = reply.send(self.purge_junk(idle_days));
             }
             Cmd::Query(q, reply) => {
                 let result = self.run_query(q);
@@ -1607,6 +1659,119 @@ impl WriterState {
             tracing::warn!(error = %e, "清空后 CHECKPOINT 失败（不影响数据正确性）");
         }
         Ok(report)
+    }
+
+    /// 清理垃圾设备：回退身份无样本 / SN 非法 / 零样本僵尸行。
+    ///
+    /// 判据是「**零样本**」——真实设备只要上线就会周期上报，扫描器不会。
+    /// 这样既能清掉 `UPS-<扫描器IP>` 与乱码 SN，又不会误伤真实设备
+    /// （哪怕它长期离线，只要历史里有样本就保留）。
+    fn purge_junk(&mut self, idle_days: i64) -> Result<JunkReport> {
+        let mut report = JunkReport::default();
+        let now = Utc::now().timestamp_millis();
+        let idle_cutoff = now - idle_days.max(0) * 86_400_000;
+
+        // 1) 先挑候选，再逐个确认是否有样本（垃圾只是少数，不必全表扫样本）
+        let mut stmt = self
+            .conn
+            .prepare("SELECT sn, last_seen_ms, online FROM devices")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                r.get::<_, Option<bool>>(2)?.unwrap_or(false),
+            ))
+        })?;
+        let mut all: Vec<(String, i64, bool)> = Vec::new();
+        for row in rows {
+            all.push(row?);
+        }
+        drop(stmt);
+
+        let mut victims: Vec<(String, u8)> = Vec::new(); // 1=fallback 2=invalid 3=idle
+        for (sn, last_seen, online) in all {
+            let invalid = !codec::is_valid_identity(&sn);
+            let fallback = codec::is_fallback_sn(&sn);
+            let stale = idle_days > 0 && last_seen < idle_cutoff;
+            if !invalid && !fallback && !stale {
+                continue; // 完全正常的设备，跳过（省掉样本查询）
+            }
+            let has_samples = self.has_samples(&sn)?;
+            if invalid {
+                victims.push((sn, 2));
+            } else if !online && (fallback || stale) && !has_samples {
+                // 在线设备一律不动：SN 未烧写的 UPS 只能靠 `UPS-<IP>` 认人，
+                // 万一样本还没落盘就被清掉，平台上就再也看不到它了。
+                victims.push((sn, if fallback { 1 } else { 3 }));
+            }
+        }
+        if victims.is_empty() {
+            return Ok(report);
+        }
+
+        let keys: Vec<String> = self.partitions.iter().cloned().collect();
+        self.conn.execute_batch("BEGIN TRANSACTION;")?;
+        let mut applied: Result<()> = Ok(());
+        for (sn, kind) in &victims {
+            for key in &keys {
+                let table = format!("ups_status_{key}");
+                match self.conn.execute(
+                    &format!("DELETE FROM \"{table}\" WHERE sn = ?"),
+                    params![sn.as_str()],
+                ) {
+                    Ok(n) => report.samples += n as u64,
+                    Err(e) => {
+                        applied = Err(e.into());
+                        break;
+                    }
+                }
+            }
+            if applied.is_err() {
+                break;
+            }
+            if let Err(e) = self.conn.execute(
+                "DELETE FROM devices WHERE sn = ?",
+                params![sn.as_str()],
+            ) {
+                applied = Err(e.into());
+                break;
+            }
+            match *kind {
+                1 => report.fallback += 1,
+                2 => report.invalid += 1,
+                _ => report.idle += 1,
+            }
+        }
+        match applied {
+            Ok(()) => self.conn.execute_batch("COMMIT;")?,
+            Err(e) => {
+                if let Err(re) = self.conn.execute_batch("ROLLBACK;") {
+                    tracing::error!(error = %re, "回滚清理垃圾设备事务失败");
+                }
+                return Err(e);
+            }
+        }
+        tracing::info!(
+            fallback = report.fallback,
+            invalid = report.invalid,
+            idle = report.idle,
+            samples = report.samples,
+            "已清理垃圾设备"
+        );
+        Ok(report)
+    }
+
+    /// 该 SN 在历史分区里是否存在样本。分区为空时直接返回 false
+    /// （`ups_status` 视图只在有分区时才存在）。
+    fn has_samples(&self, sn: &str) -> Result<bool> {
+        if self.partitions.is_empty() {
+            return Ok(false);
+        }
+        let mut stmt = self
+            .conn
+            .prepare("SELECT 1 FROM ups_status WHERE sn = ? LIMIT 1")?;
+        let mut rows = stmt.query(params![sn])?;
+        Ok(rows.next()?.is_some())
     }
 
     /// 事务内的实际清理动作。
@@ -2616,6 +2781,98 @@ mod tests {
         assert_eq!(count_rows(&st.conn, "SELECT count(*) FROM settings"), 1);
         // 清空后当前月分区已重建，`ups_status` 视图仍可用
         assert!(!st.partitions.is_empty());
+    }
+
+    // ---------------- 垃圾设备清理 ----------------
+
+    fn sample(sn: &str, ts_ms: i64) -> Sample {
+        Sample {
+            sn: sn.into(),
+            ts_ms,
+            input_voltage: 10.0,
+            output_voltage: 14.5,
+            temperature: 30.0,
+            battery: 90,
+            health: 0,
+            load_percent: 0,
+            firmware: String::new(),
+            raw: Vec::new(),
+        }
+    }
+
+    /// 垃圾设备清理：扫描器留下的 `UPS-<IP>` 残骸、乱码 SN 要清掉，
+    /// 有样本的真实设备必须保留（哪怕它此刻离线）。
+    #[test]
+    fn purge_junk_removes_scanner_residue_only() {
+        let mut st = test_state();
+        let ts = Utc::now().timestamp_millis();
+        st.apply_device_batch(
+            &[
+                meta("0123456789", "MDVR-14.153.248.6"), // 真实设备
+                meta("UPS-185.247.137.15", "MDVR-185.247.137.15"), // 扫描器残骸
+                meta("UPS-195.96.139.8", "MDVR-195.96.139.8"), // 扫描器残骸
+                meta("乱码\u{fffd}SN", "MDVR-garbage"), // 随机字节解析出的身份
+            ],
+            &[],
+        )
+        .unwrap();
+        // 扫描器连上就走 → 库里留下的是离线行
+        st.apply_device_batch(
+            &[],
+            &[
+                ("UPS-185.247.137.15".into(), false, ts),
+                ("UPS-195.96.139.8".into(), false, ts),
+                ("乱码\u{fffd}SN".into(), false, ts),
+            ],
+        )
+        .unwrap();
+        // 真实设备有样本；扫描器没有
+        st.insert_samples(&[sample("0123456789", ts)]).unwrap();
+
+        let report = st.purge_junk(30).unwrap();
+        assert_eq!(report.fallback, 2, "两条 UPS-<IP> 残骸");
+        assert_eq!(report.invalid, 1, "一条乱码 SN");
+        assert_eq!(report.idle, 0, "last_seen 就是刚才，不满足 30 天静默");
+        assert_eq!(report.total(), 3);
+
+        let left: Vec<String> = {
+            let mut stmt = st.conn.prepare("SELECT sn FROM devices ORDER BY sn").unwrap();
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
+            rows.map(|r| r.unwrap()).collect()
+        };
+        assert_eq!(left, vec!["0123456789".to_string()], "只应保留真实设备");
+    }
+
+    /// **SN 未烧写**的 UPS（`a` 帧 SN 字段是 20 个空格）只能靠 `UPS-<IP>` 认人。
+    /// 这类设备有样本，必须保留——删了平台上就看不到、也没法下发写 SN 命令了。
+    #[test]
+    fn purge_junk_keeps_blank_sn_device_that_has_samples() {
+        let mut st = test_state();
+        let ts = Utc::now().timestamp_millis();
+        st.apply_device_batch(&[meta("UPS-192.168.1.169", "MDVR-192.168.1.169")], &[])
+            .unwrap();
+        st.apply_device_batch(&[], &[("UPS-192.168.1.169".into(), false, ts)])
+            .unwrap();
+        st.insert_samples(&[sample("UPS-192.168.1.169", ts)]).unwrap();
+
+        let report = st.purge_junk(30).unwrap();
+        assert_eq!(report.total(), 0, "有样本的回退身份要保留");
+        let n: i64 = st
+            .conn
+            .query_row("SELECT count(*) FROM devices", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
+    }
+
+    /// 在线设备一律不删：样本可能还没落盘，但设备就在线，删了它等于把它弄丢。
+    #[test]
+    fn purge_junk_never_touches_online_device() {
+        let mut st = test_state();
+        // bulk 写入默认 online = true，模拟"刚连上、首个样本还没入库"
+        st.apply_device_batch(&[meta("UPS-192.168.1.169", "MDVR-192.168.1.169")], &[])
+            .unwrap();
+        let report = st.purge_junk(30).unwrap();
+        assert_eq!(report.total(), 0, "在线设备不能删");
     }
 
     // ---------------- 用户层级 ----------------

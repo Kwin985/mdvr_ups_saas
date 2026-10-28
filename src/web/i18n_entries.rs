@@ -380,6 +380,7 @@ pub const ZH_ENTRIES: &[(&str, &str)] = &[
     ("cmd.err_baud", "波特率档位必须是 0-9"),
     ("cmd.err_interval", "推送频率必须是 1-3600 秒"),
     ("cmd.err_sn", "SN 必须是 1-20 个字符"),
+    ("cmd.err_sn_charset", "SN 只能包含字母、数字、- _ .（设备上报后平台要按它认设备）"),
     ("cmd.err_unknown", "未知操作"),
     ("cmd.err_job", "任务不存在"),
     ("cmd.err_parent_missing", "上级用户不存在"),
@@ -954,6 +955,10 @@ pub const EN_ENTRIES: &[(&str, &str)] = &[
     ("cmd.err_baud", "Baud level must be 0-9"),
     ("cmd.err_interval", "Report interval must be 1-3600 seconds"),
     ("cmd.err_sn", "SN must be 1-20 characters"),
+    (
+        "cmd.err_sn_charset",
+        "SN may only contain letters, digits and - _ . (the platform identifies devices by it)",
+    ),
     ("cmd.err_unknown", "Unknown action"),
     ("cmd.err_job", "Job not found"),
     ("cmd.err_parent_missing", "Parent user does not exist"),
