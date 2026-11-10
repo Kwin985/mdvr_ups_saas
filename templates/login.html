@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>{{ t.site_title() }} · {{ t.tr("login.title") }}</title>
-  <link rel="stylesheet" href="/static/app.css?v=3">
+  <link rel="stylesheet" href="/static/app.css?v=5">
 </head>
 <body class="login-body">
   <div class="login-bg" aria-hidden="true">
@@ -113,7 +113,7 @@
           <svg class="entry-arrow" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
         </a>
       </div>
-      <p class="login-foot">{{ t.tr("login.foot") }}</p>
+      <p class="login-foot">{{ t.tr("login.foot") }} · <span class="app-version">{{ t.app_version() }}</span></p>
     </section>
   </div>
 </body>

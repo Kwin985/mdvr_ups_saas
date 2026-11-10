@@ -326,10 +326,10 @@ impl Ingest {
                         if codec::is_fallback_sn(sn)
                             && self.registry.rebind(sn, &st.sn, conn_id).await
                         {
-                            // 只有占位身份**真的入过库**才需要迁移。
-                            // 现在回退身份在首个合法帧之前不入库，此时库里可能
-                            // 已经有这台设备的正式行（含归属、改过的地址/上报间隔）；
-                            // 迁移会先 `DELETE` 同名正式行，反而把这些配置清掉。
+                            // 只有占位身份**真的入过库**才需要迁移（把占位样本
+                            // 归并到真实 SN）。回退身份在首个合法帧之前不入库，
+                            // 此时库里通常已有正式行；迁移会保留那一行（含归属、
+                            // 地址、上报间隔），只丢掉占位行。
                             if *persisted {
                                 self.store.migrate_device_sn(sn, &st.sn);
                             }

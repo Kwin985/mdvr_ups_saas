@@ -10,7 +10,7 @@
       {%- else -%}
       {#- 升级停用：入口保留、置灰。真机验证通过前不允许从面板发起升级。 -#}
       <span class="btn primary small is-locked" style="margin-left:auto"
-            title="{{ t.tr("panel.ota_disabled") }}：{{ ota_disabled_reason }}">{{ t.tr("panel.start_ota") }}</span>
+            title="{{ t.tr("panel.ota_disabled") }}: {{ ota_disabled_reason }}">{{ t.tr("panel.start_ota") }}</span>
       {%- endif -%}
     </div>
     {% include "device_live.html" %}
@@ -105,7 +105,7 @@
       <dt>{{ t.tr("panel.kv_sn") }}</dt><dd class="mono">{{ sn }}</dd>
       <dt>{{ t.tr("panel.kv_mdvr") }}</dt><dd class="mono">{{ mdvr_id }}</dd>
       <dt>{{ t.tr("panel.kv_owner") }}</dt><dd>{{ owner_label }}</dd>
-      <dt>{{ t.tr("panel.kv_group") }}</dt><dd>{{ group_name }}</dd>
+      <dt>{{ t.tr("panel.kv_group") }}</dt><dd>{{ group_display }}</dd>
       <dt>{{ t.tr("panel.kv_firmware") }}</dt><dd class="mono">{{ firmware }}</dd>
       <dt>{{ t.tr("panel.kv_address") }}</dt><dd><span id="kv-address">{{ address }}</span></dd>
       <dt>{{ t.tr("panel.kv_baudrate") }}</dt><dd>{{ baudrate }} bps</dd>

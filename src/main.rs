@@ -25,6 +25,7 @@ UPS Sentinel —— UPS 远程监控与 OTA 平台
   mdvr_ups serve           同上
   mdvr_ups purge           预演：只打印将被清空的业务数据，不做任何修改
   mdvr_ups purge --yes     执行清空（须先停止服务，DuckDB 同一时刻只允许一个写进程）
+  mdvr_ups --version       显示平台版本（含提交号与构建时间）
   mdvr_ups --help          显示本帮助
 
 清空范围：设备台账、全部历史样本、固件记录与文件、OTA 任务、审计日志、
@@ -40,6 +41,7 @@ enum Mode {
     Serve,
     /// 清空业务数据；`yes = false` 时只预演
     Purge { yes: bool },
+    Version,
     Help,
 }
 
@@ -47,6 +49,9 @@ fn parse_mode() -> Result<Mode> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
         return Ok(Mode::Help);
+    }
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        return Ok(Mode::Version);
     }
     if args.iter().any(|a| a == "purge" || a == "--purge-data") {
         return Ok(Mode::Purge {
@@ -76,9 +81,16 @@ async fn main() -> Result<()> {
             println!("{USAGE}");
             return Ok(());
         }
+        Mode::Version => {
+            println!("{}", mdvr_ups::version::banner());
+            return Ok(());
+        }
         Mode::Purge { yes } => return purge_business_data(yes).await,
         Mode::Serve => {}
     }
+
+    // 版本号打在最前面：日志里能直接看出这一轮跑的是哪个提交
+    tracing::info!("{}", mdvr_ups::version::banner());
 
     // 重启时新实例会带上该环境变量，延迟启动等旧进程释放监听端口与 DuckDB 文件锁
     if let Ok(ms) = std::env::var("MDVR_UPS_RESTART_DELAY_MS")

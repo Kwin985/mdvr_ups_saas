@@ -231,7 +231,9 @@ pub fn build_tree(
             let mut node = UserNode {
                 key: "u:__unassigned__".into(),
                 name: "__unassigned__".into(),
-                label: "未分配设备".into(),
+                // 展示名由 handlers::load_forest 按当前语言填（中文/英文），
+                // 这里只放哨兵，避免把中文硬编码进数据结构。
+                label: "__unassigned__".into(),
                 role: "—".into(),
                 depth: 1,
                 ..Default::default()
@@ -363,7 +365,7 @@ mod tests {
             admin
                 .children
                 .iter()
-                .any(|c| c.label == "未分配设备" && c.total == 1)
+                .any(|c| c.name == "__unassigned__" && c.total == 1)
         );
     }
 

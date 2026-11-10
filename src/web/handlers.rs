@@ -12,7 +12,7 @@ use serde::Deserialize;
 use crate::config::Config;
 use crate::ingest::registry::Registry;
 use crate::metrics::Metrics;
-use crate::ota::{JobProgress, OtaManager};
+use crate::ota::{JobProgress, OtaError, OtaManager};
 use crate::protocol::{Frame, Version, ack, cmd, codec};
 use crate::settings::SettingsStore;
 use crate::storage::{FirmwareRow, JobRow, SampleRow, Store};
@@ -37,6 +37,66 @@ pub struct AppState {
     pub login_throttle: Arc<auth::LoginThrottle>,
     /// 命令应答总线：下发命令后等待设备应答
     pub commands: Arc<crate::command_bus::CommandBus>,
+}
+
+/// 库里的默认分组名是**中文字面量**（历史数据 + 建表默认值），英文界面不能直接
+/// 吐给前端。分组名是用户可改的业务数据，所以只在显示层翻译，绝不回写数据库。
+const DEFAULT_GROUP_ZH: &str = "默认分组";
+/// 未分配设备节点的占位归属名（见 `tree::build_tree`）。
+const UNASSIGNED_OWNER: &str = "__unassigned__";
+
+/// 把设备树里写死的中文展示名替换成当前语言的文案。
+/// `key` / 统计数字保持原样（前端靠 key 记住折叠状态，不参与展示）。
+fn localize_tree(nodes: &mut [UserNode], t: &Tr) {
+    let default_group = t.tr("js.group_default").to_string();
+    let unassigned = t.tr("js.unassigned_group").to_string();
+    for n in nodes {
+        if n.name == UNASSIGNED_OWNER {
+            n.label = unassigned.clone();
+        }
+        for g in &mut n.groups {
+            if g.name == DEFAULT_GROUP_ZH {
+                g.name = default_group.clone();
+            }
+            for d in &mut g.devices {
+                if d.group == DEFAULT_GROUP_ZH {
+                    d.group = default_group.clone();
+                }
+            }
+        }
+        localize_tree(&mut n.children, t);
+    }
+}
+
+/// 面板里「设备分组」一栏的展示值。表单 input 的 value 必须保留库里的原值，
+/// 否则用户一保存就把翻译后的名字写回数据库了。
+fn display_group(name: &str, t: &Tr) -> String {
+    if name == DEFAULT_GROUP_ZH {
+        t.tr("js.group_default").to_string()
+    } else {
+        name.to_string()
+    }
+}
+
+/// `OtaError` 的 Display 是中文（服务日志用），不能原样塞进英文界面的 toast。
+fn ota_error_text(t: &Tr, e: &OtaError) -> String {
+    use OtaError::*;
+    match e {
+        Offline => t.tr("ota.err.offline").into(),
+        Busy => t.tr("ota.err.busy").into(),
+        FirmwareMissing => t.tr("ota.err.fw_missing").into(),
+        TooLarge(n) => t.trf("ota.err.too_large", &[("n", n.to_string())]),
+        Cancelled => t.tr("ota.err.cancelled").into(),
+        Disabled(_) => t.trf(
+            "ota.err.disabled",
+            &[("reason", t.tr("ota.disabled_reason").to_string())],
+        ),
+        Timeout => t.tr("ota.err.timeout").into(),
+        Rejected(code) => t.trf("ota.err.rejected", &[("code", format!("0x{code:02X}"))]),
+        FlashFail(n) => t.trf("ota.err.flash_fail", &[("n", n.to_string())]),
+        Send(msg) => t.trf("ota.err.send", &[("msg", msg.clone())]),
+        Store(msg) => t.trf("ota.err.store", &[("msg", msg.clone())]),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -200,7 +260,10 @@ fn fmt_relative(t: &Tr, ms: i64) -> String {
         s if s < 86400 => ("rel.hours", s / 3600),
         s => ("rel.days", s / 86400),
     };
-    t.trf(key, &[("n", n.to_string())])
+    // `rel.*` 与 `js.rel_*` 用的是单花括号 `{n}`（JS 侧也是 `.replace("{n}", ...)`），
+    // 而 `trf` 替换的是双花括号 `{{name}}`。用 trf 会一个都替不掉，页面上就会
+    // 直接显示 "Last report {n}s ago"。
+    t.tr(key).replace("{n}", &n.to_string())
 }
 
 fn fmt_size(bytes: i64) -> String {
@@ -323,6 +386,8 @@ struct DevicePanel {
     owner: String,
     owner_label: String,
     group_name: String,
+    /// 分组名的本地化展示值（默认分组在库里是中文）；表单 value 仍用 group_name
+    group_display: String,
     owners: Vec<String>,
     can_assign: bool,
     online: bool,
@@ -1247,6 +1312,7 @@ pub async fn device_panel(
             row.owner.clone()
         },
         group_name: row.group_name.clone(),
+        group_display: display_group(&row.group_name, &t),
         owners: all_users.iter().map(|u| u.username.clone()).collect(),
         can_assign: state.rbac.enforce(&user.role, "/devices/*/assign", "POST"),
         online: live.is_some(),
@@ -1358,7 +1424,7 @@ pub async fn device_panel(
         can_control,
         can_ota,
         ota_enabled: state.ota.enabled(),
-        ota_disabled_reason: crate::ota::OTA_DISABLED_REASON,
+        ota_disabled_reason: t.tr("ota.disabled_reason"),
     }
     .render()
     .map(Html)
@@ -1649,8 +1715,8 @@ fn expected_response(action: &str) -> Option<u8> {
 fn format_reply(t: &Tr, frame: &Frame) -> String {
     match frame.command {
         cmd::VERSION => match Version::raw_string(&frame.payload) {
-            Some(v) => format!("{}：{}", t.tr("cmd.reply_version"), v),
-            None => format!("{}：{}", t.tr("cmd.reply_frame"), hex_bytes(&frame.payload)),
+            Some(v) => format!("{}: {}", t.tr("cmd.reply_version"), v),
+            None => format!("{}: {}", t.tr("cmd.reply_frame"), hex_bytes(&frame.payload)),
         },
         // 设置类命令 + 重启：设备回 1 字节 ack（0x30 成功 / 0x31 重发 / 0x32 Flash 失败）
         cmd::SET_ADDRESS
@@ -1658,13 +1724,13 @@ fn format_reply(t: &Tr, frame: &Frame) -> String {
         | cmd::SET_REPORT_INTERVAL
         | cmd::SET_SN
         | cmd::RESTART => match codec::parse_ack(&frame.payload) {
-            Some(code) => format!("{}：{}", t.tr("cmd.reply_ack"), ack_text(t, code)),
-            None => format!("{}：{}", t.tr("cmd.reply_frame"), hex_bytes(&frame.payload)),
+            Some(code) => format!("{}: {}", t.tr("cmd.reply_ack"), ack_text(t, code)),
+            None => format!("{}: {}", t.tr("cmd.reply_frame"), hex_bytes(&frame.payload)),
         },
+        // 未知命令用命令字（16 进制）标识，比 codec::command_name 的中文名更适合英文界面
         other => format!(
-            "{}：{} {}",
+            "{}: 0x{other:02X} {}",
             t.tr("cmd.reply_frame"),
-            codec::command_name(other),
             hex_bytes(&frame.payload)
         ),
     }
@@ -1820,7 +1886,7 @@ pub async fn ota_page(
         can_manage,
         selected_sn: q.sn.unwrap_or_default(),
         ota_enabled: state.ota.enabled(),
-        ota_disabled_reason: crate::ota::OTA_DISABLED_REASON,
+        ota_disabled_reason: t.tr("ota.disabled_reason"),
     }
     .render()
     .map(Html)
@@ -1972,7 +2038,7 @@ pub async fn ota_upload(
             ),
             Err(e) => ToastTemplate {
                 ok: false,
-                message: format!("{}：{e}", t.tr("cmd.err_start")),
+                message: format!("{}: {}", t.tr("cmd.err_start"), ota_error_text(&t, &e)),
             }
             .render()
             .map(|h| Html(h).into_response())
@@ -2007,9 +2073,9 @@ pub async fn ota_start(
         return ToastTemplate {
             ok: false,
             message: format!(
-                "{}：{}",
+                "{}: {}",
                 t.tr("cmd.err_start"),
-                crate::ota::OTA_DISABLED_REASON
+                t.tr("ota.disabled_reason")
             ),
         }
         .render()
@@ -2038,7 +2104,7 @@ pub async fn ota_start(
         ),
         Err(e) => ToastTemplate {
             ok: false,
-            message: format!("{}：{e}", t.tr("cmd.err_start")),
+            message: format!("{}: {}", t.tr("cmd.err_start"), ota_error_text(&t, &e)),
         }
         .render()
         .map(|h| Html(h).into_response())
@@ -2613,7 +2679,7 @@ async fn load_forest(state: &AppState, user: &AuthUser) -> Vec<UserNode> {
         .filter(|l| l.busy)
         .map(|l| l.sn.clone())
         .collect();
-    tree::build_tree(
+    let mut forest = tree::build_tree(
         &users,
         &devices,
         &latest,
@@ -2621,7 +2687,11 @@ async fn load_forest(state: &AppState, user: &AuthUser) -> Vec<UserNode> {
         &busy,
         &user.username,
         user.is_admin(),
-    )
+    );
+    // 树里写死的「未分配设备」/「默认分组」按当前语言替换，英文界面不残留中文
+    let t = Tr::from(state.settings.lang());
+    localize_tree(&mut forest, &t);
+    forest
 }
 
 /// 设备级越权校验：非管理员只能看自己子树的设备。
@@ -2829,7 +2899,16 @@ pub async fn device_assign(
     if state.store.device(&sn).await.ok().flatten().is_none() {
         return toast_err(t.tr("cmd.err_device"));
     }
-    state.store.assign_device(&sn, &owner, &group);
+    // 等写线程确认后再提示成功：否则 `send` 失败或 `tree-refresh` 抢在写入前
+    // 拉树，都会出现「提示保存成功、刷新后还是老样子」。
+    match state.store.assign_device(&sn, &owner, &group).await {
+        Ok(0) => return toast_err(t.tr("cmd.err_device")),
+        Ok(_) => {}
+        Err(e) => {
+            tracing::error!(error = %e, sn = %sn, "保存设备归属失败");
+            return toast_err(t.tr("toast.server_error"));
+        }
+    }
     state.store.audit(
         &user.username,
         "device.assign",
@@ -2844,7 +2923,13 @@ pub async fn device_assign(
         ),
     );
     let message = if owner.is_empty() {
-        t.trf("flash.assign_cleared", &[("sn", sn.clone())])
+        if group.is_empty() {
+            t.trf("flash.assign_cleared", &[("sn", sn.clone())])
+        } else {
+            // 只填了分组名、没选归属用户：设备仍会挂在「未分配设备」节点下。
+            // 不说清楚的话，用户下次登录会以为分组「丢了」。
+            t.trf("flash.assign_group_only", &[("group", group.clone())])
+        }
     } else {
         t.trf(
             "flash.assign_updated",
@@ -3204,6 +3289,29 @@ mod analysis_tests {
         let (from, to) = recent_window(now);
         assert_eq!(to, now);
         assert_eq!(to - from, 24 * 3600 * 1000);
+    }
+
+    /// 回归：词典用单花括号 `{n}`，而 `trf` 只认双花括号 `{{n}}`。
+    /// 用错就会在页面上直接显示 "Last report {n}s ago"。
+    #[test]
+    fn relative_time_substitutes_the_number() {
+        let en = Tr::new("en-US");
+        let zh = Tr::new("zh-CN");
+        let now = Utc::now().timestamp_millis();
+        assert_eq!(fmt_relative(&en, now - 30_000), "30s ago");
+        assert_eq!(fmt_relative(&en, now - 120_000), "2 min ago");
+        assert_eq!(fmt_relative(&en, now - 7_200_000), "2h ago");
+        assert_eq!(fmt_relative(&en, now - 172_800_000), "2d ago");
+        assert_eq!(fmt_relative(&zh, now - 30_000), "30 秒前");
+        for (lang, ms) in [
+            (Tr::new("en-US"), now - 30_000),
+            (Tr::new("en-US"), now - 120_000),
+        ] {
+            assert!(
+                !fmt_relative(&lang, ms).contains("{n}"),
+                "占位符不能被原样输出"
+            );
+        }
     }
 
     // ---------------- 用户管理 ----------------

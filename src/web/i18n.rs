@@ -79,6 +79,19 @@ impl Tr {
         self.lang == "en-US"
     }
 
+    /// 平台版本标签（`v0.1.0+3f9a2c1`）。
+    ///
+    /// 挂在 `Tr` 上是因为它已经是每个模板都能拿到的视图上下文
+    /// （与 `site_title()` 同理），否则得给十几个模板结构体各加一个字段。
+    pub fn app_version(&self) -> String {
+        crate::version::label()
+    }
+
+    /// 构建时间，未知时为空串（模板用 `is_empty()` 判断是否渲染）。
+    pub fn build_time(&self) -> &'static str {
+        crate::version::built_at()
+    }
+
     /// `html lang` 属性
     pub fn html_lang(&self) -> &'static str {
         if self.is_en() { "en" } else { "zh-CN" }
@@ -133,7 +146,10 @@ pub const JS_KEYS: &[&str] = &[
     "js.filter_offline",
     "js.confirm_delete",
     "js.group_default",
+    "js.battery",
     "js.unassigned",
+    "js.unassigned_group",
+    "js.menu_expand",
     "js.node_online",
     "js.node_offline",
     "js.no_result",
@@ -218,6 +234,64 @@ mod tests {
         let d = js_dict("en-US");
         for k in JS_KEYS {
             assert!(d.contains(k), "缺少 JS 键 {k}");
+        }
+    }
+
+    fn has_cjk(s: &str) -> bool {
+        s.chars()
+            .any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))
+    }
+
+    /// 英文界面冒出中文，绝大多数是「只加了 ZH、忘了 EN」——回退逻辑会把中文
+    /// 原样显示出来。这里把整个词典（不只是 ups.*）都锁住。
+    #[test]
+    fn every_zh_key_has_an_english_entry() {
+        // 品牌名两种语言都是 "UPS Sentinel"，无需翻译
+        const EXEMPT: &[&str] = &["brand.name"];
+        let missing: Vec<&str> = ZH_ENTRIES
+            .iter()
+            .map(|(k, _)| *k)
+            .filter(|k| !EXEMPT.contains(k))
+            .filter(|k| !EN_ENTRIES.iter().any(|(ek, _)| ek == k))
+            .collect();
+        assert!(missing.is_empty(), "英文词典缺少这些键：{missing:?}");
+    }
+
+    /// 英文界面不该出现任何汉字。历史上两次踩坑：只加 ZH 忘了 EN（回退成中文），
+    /// 以及 OTA 停用原因/默认分组名直接硬编码中文。这里把词典这一层彻底锁住。
+    #[test]
+    fn english_entries_contain_no_chinese() {
+        let bad: Vec<(&str, &str)> = EN_ENTRIES
+            .iter()
+            .copied()
+            .filter(|(_, v)| has_cjk(v))
+            .collect();
+        assert!(bad.is_empty(), "英文词条里混入了中文：{bad:?}");
+    }
+
+    /// JS 侧 window.I18N 只注入 JS_KEYS，漏一条就会用 JS 里的英文兜底值，
+    /// 但兜底値不该是中文。这里同时检查「有 EN 条目」与「条目确实是英文」。
+    #[test]
+    fn js_keys_have_real_english_translations() {
+        let bad: Vec<&str> = JS_KEYS
+            .iter()
+            .copied()
+            .filter(|k| {
+                !EN_ENTRIES
+                    .iter()
+                    .any(|(ek, ev)| ek == k && !has_cjk(ev))
+            })
+            .collect();
+        assert!(bad.is_empty(), "这些 JS 键缺英文翻译：{bad:?}");
+    }
+
+    #[test]
+    fn dictionary_keys_are_unique() {
+        for (name, entries) in [("ZH", ZH_ENTRIES), ("EN", EN_ENTRIES)] {
+            let mut seen = std::collections::HashSet::new();
+            for (k, _) in entries {
+                assert!(seen.insert(*k), "{name} 词典有重复键：{k}");
+            }
         }
     }
 }

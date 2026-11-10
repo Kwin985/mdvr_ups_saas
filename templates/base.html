@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}{{ t.site_title() }}{% endblock %}</title>
-  <link rel="stylesheet" href="/static/app.css?v=3">
+  <link rel="stylesheet" href="/static/app.css?v=5">
   <script>
     // 尽早应用菜单收起状态，避免刷新时侧栏闪一下再收起
     try {
@@ -14,7 +14,7 @@
     } catch (e) { /* 隐私模式下忽略 */ }
   </script>
   <script src="/static/htmx.min.js" defer></script>
-  <script src="/static/shell.js?v=3" defer></script>
+  <script src="/static/shell.js?v=4" defer></script>
   <script>window.I18N = {{ i18n_js|safe }};</script>
   {% block head %}{% endblock %}
 </head>
@@ -113,6 +113,11 @@
         </div>
       </div>
       <span class="tree-hint sidebar-note">{{ t.tr("sidebar.note") }}</span>
+      {% if user.role == "admin" %}
+      <a class="app-version" href="/admin/settings" title="{{ t.tr("about.title") }}">{{ t.app_version() }}</a>
+      {% else %}
+      <span class="app-version">{{ t.app_version() }}</span>
+      {% endif %}
     </div>
   </aside>
 

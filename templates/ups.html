@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>{{ t.site_title() }} · {{ t.tr("ups.title") }}</title>
-  <link rel="stylesheet" href="/static/app.css?v=3">
+  <link rel="stylesheet" href="/static/app.css?v=5">
   <link rel="stylesheet" href="/static/ups.css?v=1">
 </head>
 <body class="ups-body">
@@ -308,6 +308,6 @@
     </section>
   </main>
 
-  <footer class="ups-foot">{{ t.tr("ups.foot") }}</footer>
+  <footer class="ups-foot">{{ t.tr("ups.foot") }} · <span class="app-version">{{ t.app_version() }}</span></footer>
 </body>
 </html>

@@ -85,11 +85,11 @@
       '<path d="M8 10.5V7.6a4 4 0 0 1 8 0v2.9"></path>' +
       '<circle cx="12" cy="15.4" r="1.15" fill="currentColor" stroke="none"></circle>' +
       "</svg></div>" +
-      "<h3>" + esc(tr("js.idle_title", "会话已锁定")) + "</h3>" +
-      "<p>" + esc(tr("js.idle_body", "已超过 {min} 分钟没有操作，页面已停止自动刷新以节省流量。").replace("{min}", String(minutes))) + "</p>" +
-      '<p class="idle-note">' + esc(tr("js.idle_note", "后台任务（如 OTA 升级）仍在继续运行，重新登录后即可查看最新状态。")) + "</p>" +
+      "<h3>" + esc(tr("js.idle_title", "Session locked")) + "</h3>" +
+      "<p>" + esc(tr("js.idle_body", "No activity for {min} minutes. Auto-refresh has been paused to save bandwidth.").replace("{min}", String(minutes))) + "</p>" +
+      '<p class="idle-note">' + esc(tr("js.idle_note", "Background tasks (e.g. OTA updates) keep running; sign in again to see the latest state.")) + "</p>" +
       '<a class="idle-btn" href="/login?next=' + encodeURIComponent(next) + '">' +
-      esc(tr("js.idle_button", "重新登录")) +
+      esc(tr("js.idle_button", "Sign in again")) +
       '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M13 6l6 6-6 6"></path></svg>' +
       "</a></div>";
     document.body.appendChild(wrap);
@@ -137,10 +137,9 @@
   function applyMenu(collapsed) {
     document.documentElement.classList.toggle("menu-collapsed", collapsed);
     var btn = document.querySelector(".menu-collapse");
-    var tip = collapsed ? "展开菜单" : "收起菜单";
-    if (window.I18N && window.I18N["menu.collapse_short"]) {
-      tip = window.I18N["menu.collapse_short"];
-    }
+    var tip = collapsed
+      ? ((window.I18N && window.I18N["js.menu_expand"]) || "Expand menu")
+      : ((window.I18N && window.I18N["menu.collapse_short"]) || "Collapse menu");
     if (btn) btn.title = tip;
     // 侧栏宽度变化后让图表等自适应容器重排
     window.dispatchEvent(new Event("resize"));

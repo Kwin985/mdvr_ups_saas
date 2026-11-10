@@ -27,7 +27,7 @@
     <label>{{ t.tr("ota.target") }}
       <select name="sn" required>
         {% for d in devices %}
-        <option value="{{ d.sn }}" {% if d.sn == selected_sn %}selected{% endif %}>{{ d.sn }} · {{ d.mdvr_id }}{% if d.online %}（{{ t.tr("ota.online_tag") }}）{% else %}（{{ t.tr("ota.offline_tag") }}）{% endif %}</option>
+        <option value="{{ d.sn }}" {% if d.sn == selected_sn %}selected{% endif %}>{{ d.sn }} · {{ d.mdvr_id }}{% if d.online %}({{ t.tr("ota.online_tag") }}){% else %}({{ t.tr("ota.offline_tag") }}){% endif %}</option>
         {% endfor %}
       </select>
     </label>
@@ -35,7 +35,11 @@
       <input name="version" placeholder="{{ t.tr("ota.fw_ph") }}" required>
     </label>
     <label>{{ t.tr("ota.fw_file") }}
-      <input type="file" name="file" accept=".bin,.hex,.fw" required>
+      <span class="file-picker">
+        <input type="file" name="file" accept=".bin,.hex,.fw" required data-file-input>
+        <span class="file-picker-btn">{{ t.tr("ota.choose_file") }}</span>
+        <span class="file-picker-name" data-file-name data-empty="{{ t.tr("ota.no_file_chosen") }}">{{ t.tr("ota.no_file_chosen") }}</span>
+      </span>
     </label>
     <button class="btn primary" type="submit">{{ t.tr("ota.quick_submit") }}</button>
   </form>
@@ -54,7 +58,11 @@
         <input name="version" placeholder="{{ t.tr("ota.fw_ph") }}" required>
       </label>
       <label>{{ t.tr("ota.fw_file") }}
-        <input type="file" name="file" accept=".bin,.hex,.fw" required>
+        <span class="file-picker">
+          <input type="file" name="file" accept=".bin,.hex,.fw" required data-file-input>
+          <span class="file-picker-btn">{{ t.tr("ota.choose_file") }}</span>
+          <span class="file-picker-name" data-file-name data-empty="{{ t.tr("ota.no_file_chosen") }}">{{ t.tr("ota.no_file_chosen") }}</span>
+        </span>
       </label>
       <button class="btn primary" type="submit">{{ t.tr("ota.upload_submit") }}</button>
     </form>
@@ -91,14 +99,14 @@
       <label>{{ t.tr("ota.target") }}
         <select name="sn" required>
           {% for d in devices %}
-          <option value="{{ d.sn }}">{{ d.sn }} · {{ d.mdvr_id }}{% if d.online %}（{{ t.tr("ota.online_tag") }}）{% else %}（{{ t.tr("ota.offline_tag") }}）{% endif %}</option>
+          <option value="{{ d.sn }}">{{ d.sn }} · {{ d.mdvr_id }}{% if d.online %}({{ t.tr("ota.online_tag") }}){% else %}({{ t.tr("ota.offline_tag") }}){% endif %}</option>
           {% endfor %}
         </select>
       </label>
       <label>{{ t.tr("ota.fw_version") }}
         <select name="firmware_id" required>
           {% for f in firmware %}
-          <option value="{{ f.id }}">v{{ f.version }} · {{ f.filename }}（{{ f.size }}）</option>
+          <option value="{{ f.id }}">v{{ f.version }} · {{ f.filename }}({{ f.size }})</option>
           {% endfor %}
         </select>
       </label>
@@ -151,4 +159,21 @@
     </table>
   </div>
 </div>
+
+<script>
+(function () {
+  // 原生 <input type="file"> 的按钮与「未选择任何文件」由浏览器按**浏览器语言**
+  // 渲染，中文浏览器打开英文界面照样会显示中文。原生控件透明覆盖在自定义控件上
+  // 保留表单提交与 required 校验，视觉文案全部走服务端 i18n。
+  document.querySelectorAll("[data-file-input]").forEach(function (input) {
+    var out = input.parentElement.querySelector("[data-file-name]");
+    if (!out) return;
+    input.addEventListener("change", function () {
+      var name = input.files && input.files.length ? input.files[0].name : "";
+      out.textContent = name || out.dataset.empty || "No file chosen";
+      out.classList.toggle("has-file", !!name);
+    });
+  });
+})();
+</script>
 {% endblock %}

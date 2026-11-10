@@ -108,6 +108,9 @@ pub fn router(state: AppState) -> Router {
 async fn healthz(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "ok",
+        // 版本随二进制编译进来，运维可直接用 /healthz 确认线上跑的是哪个提交
+        "version": crate::version::label(),
+        "built_at": crate::version::built_at(),
         "online_devices": state.registry.online_count().await,
         "active_jobs": state.ota.active_jobs().len(),
     }))

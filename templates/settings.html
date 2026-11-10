@@ -44,6 +44,19 @@
   </div>
 </form>
 
+<div class="panel">
+  <div class="panel-head"><h3>{{ t.tr("about.title") }}</h3></div>
+  <dl class="kv settings-kv">
+    <dt>{{ t.tr("about.version") }}</dt>
+    <dd><span class="mono">{{ t.app_version() }}</span></dd>
+    {% if !t.build_time().is_empty() %}
+    <dt>{{ t.tr("about.built_at") }}</dt>
+    <dd><span class="mono">{{ t.build_time() }}</span></dd>
+    {% endif %}
+  </dl>
+  <p class="hint">{{ t.tr("about.hint") }}</p>
+</div>
+
 <script>
 function restartSystem(btn) {
   if (!confirm(btn.dataset.confirm)) return;

@@ -23,7 +23,7 @@
     try { localStorage.setItem(LS_KEY, JSON.stringify(Array.from(collapsed))); } catch (e) {}
   }
 
-  // 文案：服务端注入 window.I18N，缺失时回退中文（与服务端词典一致）
+  // Copy: window.I18N is injected by the server; fallbacks below are English
   function T(key, fallback) {
     if (window.I18N && window.I18N[key]) return window.I18N[key];
     return fallback;
@@ -42,10 +42,10 @@
     var s = Math.floor(diff / 1000);
     if (s < 60) return T("js.rel_secs", "{n}s ago").replace("{n}", s);
     var m = Math.floor(s / 60);
-    if (m < 60) return T("js.rel_mins", "{n} 分钟前").replace("{n}", m);
+    if (m < 60) return T("js.rel_mins", "{n} min ago").replace("{n}", m);
     var h = Math.floor(m / 60);
-    if (h < 24) return T("js.rel_hours", "{n} 小时前").replace("{n}", h);
-    return T("js.rel_days", "{n} 天前").replace("{n}", Math.floor(h / 24));
+    if (h < 24) return T("js.rel_hours", "{n} h ago").replace("{n}", h);
+    return T("js.rel_days", "{n} d ago").replace("{n}", Math.floor(h / 24));
   }
 
   function deviceVisible(d) {
@@ -60,7 +60,7 @@
 
   function renderDevice(d) {
     var cls = d.online ? "online" : "offline";
-    var text = d.online ? (d.busy ? T("dashboard.badge_busy", "升级中") : T("js.node_online", "在线")) : T("js.node_offline", "离线");
+    var text = d.online ? (d.busy ? T("dashboard.badge_busy", "Upgrading") : T("js.node_online", "Online")) : T("js.node_offline", "Offline");
     var stateCls = d.busy ? "busy" : cls;
     var battery = d.battery > 0 ? d.battery + "%" : "—";
     var fw = d.firmware ? "FW " + d.firmware : "FW —";
@@ -70,7 +70,7 @@
         '<div class="dev-name"><span class="status-dot ' + cls + '"></span>' + esc(d.sn) + '</div>' +
         '<div class="dev-meta">' +
           '<span class="dev-state ' + stateCls + '">' + text + '</span>' +
-          '<span>电量 ' + battery + '</span>' +
+          '<span>' + esc(T("js.battery", "Battery")) + ' ' + battery + '</span>' +
           '<span>' + esc(fw) + '</span>' +
           '<span>' + relTime(d.last_seen_ms) + '</span>' +
         '</div>' +
@@ -110,7 +110,7 @@
   function render() {
     var html = state.forest.map(function (u) { return renderUser(u, 0); }).join("");
     if (!html) {
-      treeEl.innerHTML = '<div class="empty-hint">' + esc(T("js.no_result", "没有匹配的设备")) + '</div>';
+      treeEl.innerHTML = '<div class="empty-hint">' + esc(T("js.no_result", "No matching devices")) + '</div>';
       return;
     }
     treeEl.innerHTML = html;
@@ -154,7 +154,7 @@
     render();
     if (stampEl) {
       var d = new Date();
-      stampEl.textContent = T("js.sync_now", "已同步") + " " + ("0" + d.getHours()).slice(-2) + ":" +
+      stampEl.textContent = T("js.sync_now", "Synced") + " " + ("0" + d.getHours()).slice(-2) + ":" +
         ("0" + d.getMinutes()).slice(-2) + ":" + ("0" + d.getSeconds()).slice(-2);
     }
     if (!state.booted) {

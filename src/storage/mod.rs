@@ -301,6 +301,8 @@ enum Cmd {
         sn: String,
         owner: String,
         group_name: String,
+        /// 回执：让 Web 层等写线程确认后再提示"已保存"
+        reply: oneshot::Sender<Result<u64>>,
     },
     SetUserParent {
         username: String,
@@ -515,12 +517,21 @@ impl Store {
     }
 
     /// 调整设备归属与分组；owner 为空表示退回「未分配」。
-    pub fn assign_device(&self, sn: &str, owner: &str, group_name: &str) {
-        let _ = self.tx.send(Cmd::AssignDevice {
-            sn: sn.to_string(),
-            owner: owner.to_string(),
-            group_name: group_name.to_string(),
-        });
+    ///
+    /// 等写线程确认再返回（旧版是 fire-and-forget：`send` 失败也会提示成功，
+    /// 且 `HX-Trigger: tree-refresh` 可能在写入落地前就拉树，看起来像"没保存"）。
+    /// 返回受影响行数，0 表示设备不存在。
+    pub async fn assign_device(&self, sn: &str, owner: &str, group_name: &str) -> Result<u64> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(Cmd::AssignDevice {
+                sn: sn.to_string(),
+                owner: owner.to_string(),
+                group_name: group_name.to_string(),
+                reply: tx,
+            })
+            .map_err(|_| anyhow!("存储线程已退出"))?;
+        rx.await.map_err(|_| anyhow!("归属写入被取消"))?
     }
 
     /// 调整用户的上级（空字符串表示提升为顶级用户）。
@@ -950,8 +961,8 @@ impl PendingWrites {
     }
 
     fn flush(&mut self, state: &mut WriterState) {
-        // 重绑必须排在设备写入之前：bulk 写入会先删掉同名新行，
-        // 顺序颠倒会把刚写入的真实 SN 行删掉。
+        // 重绑排在设备写入之前：先把占位 SN 归并到真实 SN，随后的 upsert
+        // 才能用 NOT EXISTS 命中已有正式行，不会覆盖归属与设备参数。
         if !self.migrations.is_empty() {
             let pairs = std::mem::take(&mut self.migrations);
             if let Err(e) = state.bulk_migrate_device_sn(&pairs) {
@@ -1099,10 +1110,13 @@ impl WriterState {
                 sn,
                 owner,
                 group_name,
+                reply,
             } => {
-                if let Err(e) = self.assign_device(&sn, &owner, &group_name) {
+                let r = self.assign_device(&sn, &owner, &group_name);
+                if let Err(e) = &r {
                     tracing::error!(error = %e, sn = %sn, "更新设备归属失败");
                 }
+                let _ = reply.send(r);
             }
             Cmd::SetUserParent { username, parent } => {
                 if let Err(e) = self.set_user_parent(&username, &parent) {
@@ -1369,16 +1383,37 @@ impl WriterState {
         Ok(())
     }
 
-    /// 占位 SN → 真实 SN：先清掉可能残留的同名旧行（避免主键冲突），
-    /// 再迁移 devices 行（保留 owner / group_name 等归属），最后迁移所有月分区样本。
-    fn migrate_device_sn(&mut self, old_sn: &str, new_sn: &str) -> Result<()> {
-        let now = Utc::now().timestamp_millis();
-        self.conn
-            .execute("DELETE FROM devices WHERE sn = ?", params![new_sn])?;
-        self.conn.execute(
-            "UPDATE devices SET sn = ?, updated_at_ms = ? WHERE sn = ?",
-            params![new_sn, now, old_sn],
+    /// 占位 SN → 真实 SN：devices 行的决策（样本迁移由调用方负责）。
+    ///
+    /// **目标 SN 已有正式行时必须保留它**：那一行带着用户设置的归属、分组、
+    /// 串口地址和上报间隔。旧实现先 `DELETE FROM devices WHERE sn = 新SN`
+    /// 再把占位行改名顶上，于是设备每次重连触发重绑，都会把用户设置清空
+    /// （表现为「分组保存完只有当次有效，下次登录又回到未分组」）。
+    fn migrate_one_device(&mut self, old_sn: &str, new_sn: &str, now: i64) -> Result<bool> {
+        if old_sn == new_sn {
+            return Ok(false);
+        }
+        let target_exists: bool = self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM devices WHERE sn = ?)",
+            params![new_sn],
+            |r| r.get(0),
         )?;
+        if target_exists {
+            // 正式行更权威，只丢掉占位行
+            self.conn
+                .execute("DELETE FROM devices WHERE sn = ?", params![old_sn])?;
+        } else {
+            self.conn.execute(
+                "UPDATE devices SET sn = ?, updated_at_ms = ? WHERE sn = ?",
+                params![new_sn, now, old_sn],
+            )?;
+        }
+        Ok(target_exists)
+    }
+
+    /// 单条兜底路径：devices 行 + 所有月分区样本整体换 SN。
+    fn migrate_device_sn(&mut self, old_sn: &str, new_sn: &str) -> Result<()> {
+        let kept = self.migrate_one_device(old_sn, new_sn, Utc::now().timestamp_millis())?;
         let mut moved = 0u64;
         for key in self.partitions.clone() {
             let table = format!("ups_status_{key}");
@@ -1393,14 +1428,19 @@ impl WriterState {
         tracing::info!(
             old = %old_sn,
             new = %new_sn,
+            kept_existing = kept,
             samples = moved,
             "设备已从占位 SN 重绑到真实 SN"
         );
         Ok(())
     }
 
-    /// 批量「占位 SN → 真实 SN」重绑：一次 drain 里可能同时有上千台设备
-    /// 上报真实 SN，逐台三条语句会重新拖死写线程，这里同样走临时表 + 集合式。
+    /// 批量重绑：devices 行逐台走同一套决策（包在一个事务里），样本仍用临时表集合式迁移。
+    ///
+    /// 刻意不写 `DELETE ... WHERE sn IN (SELECT new_sn ...)` + `UPDATE ... FROM`：
+    /// 那种写法既要处理目标行已存在时的归属保留，又依赖 DuckDB 在 UPDATE 里自引用
+    /// 同一张表，语义脆弱。重绑只在设备上报到真实 SN 时发生，逐台几条主键点查
+    /// 的开销完全可以接受。
     fn bulk_migrate_device_sn(&mut self, pairs: &[(String, String)]) -> Result<()> {
         if pairs.is_empty() {
             return Ok(());
@@ -1416,15 +1456,28 @@ impl WriterState {
             }
             app.flush()?;
         }
-        // 目标 SN 可能已有残留行，先清掉避免主键冲突
-        self.conn.execute_batch(
-            "DELETE FROM devices WHERE sn IN (SELECT new_sn FROM bulk_migrate);",
-        )?;
-        self.conn.execute(
-            "UPDATE devices SET sn = m.new_sn, updated_at_ms = ?
-             FROM bulk_migrate m WHERE devices.sn = m.old_sn",
-            params![now],
-        )?;
+
+        self.conn.execute_batch("BEGIN TRANSACTION;")?;
+        let mut kept = 0usize;
+        let mut result: Result<()> = Ok(());
+        for (old, new) in pairs {
+            match self.migrate_one_device(old, new, now) {
+                Ok(true) => kept += 1,
+                Ok(false) => {}
+                Err(e) => {
+                    result = Err(e);
+                    break;
+                }
+            }
+        }
+        match result {
+            Ok(()) => self.conn.execute_batch("COMMIT;")?,
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK;");
+                return Err(e);
+            }
+        }
+
         let mut moved = 0u64;
         for key in self.partitions.clone() {
             let table = format!("ups_status_{key}");
@@ -1438,6 +1491,7 @@ impl WriterState {
         }
         tracing::info!(
             devices = pairs.len(),
+            kept_existing = kept,
             samples = moved,
             "批量重绑设备身份（占位 SN → 真实 SN）"
         );
@@ -1589,17 +1643,17 @@ impl WriterState {
         Ok(())
     }
 
-    fn assign_device(&mut self, sn: &str, owner: &str, group_name: &str) -> Result<()> {
+    fn assign_device(&mut self, sn: &str, owner: &str, group_name: &str) -> Result<u64> {
         let group = if group_name.trim().is_empty() {
             "默认分组"
         } else {
             group_name.trim()
         };
-        self.conn.execute(
+        let n = self.conn.execute(
             "UPDATE devices SET owner = ?, group_name = ?, updated_at_ms = ? WHERE sn = ?",
             params![owner, group, Utc::now().timestamp_millis(), sn],
         )?;
-        Ok(())
+        Ok(n as u64)
     }
 
     fn cleanup(&mut self, retention_days: i64) {
@@ -2562,6 +2616,79 @@ mod tests {
             )
             .unwrap();
         assert_eq!(moved, 2, "历史样本的 SN 也要一起迁移");
+    }
+
+    /// 重绑到**已存在**的正式 SN 时，正式行的归属/分组/串口参数必须原样保留。
+    /// 回归用：旧实现先 DELETE 目标行再让占位行改名顶上，会把用户设置清空。
+    #[test]
+    fn bulk_migrate_keeps_existing_device_config() {
+        let mut state = test_state();
+        state
+            .apply_device_batch(
+                &[meta("UPS-REAL", "MDVR-B"), meta("UPS-1.2.3.4", "MDVR-A")],
+                &[],
+            )
+            .unwrap();
+        state
+            .conn
+            .execute(
+                "UPDATE devices SET owner = 'admin', group_name = 'Fleet-A',
+                 address = 7, report_interval = 10 WHERE sn = 'UPS-REAL'",
+                [],
+            )
+            .unwrap();
+
+        state
+            .bulk_migrate_device_sn(&[("UPS-1.2.3.4".into(), "UPS-REAL".into())])
+            .unwrap();
+
+        let row: (String, String, i64, i64, i64) = state
+            .conn
+            .query_row(
+                "SELECT owner, group_name, address, report_interval,
+                        (SELECT count(*) FROM devices)
+                 FROM devices WHERE sn = 'UPS-REAL'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            row,
+            ("admin".to_string(), "Fleet-A".to_string(), 7, 10, 1),
+            "正式行的归属与参数不能被占位行覆盖，且占位行要清掉"
+        );
+    }
+
+    /// 单条兜底路径同样要保留正式行。
+    #[test]
+    fn single_migrate_keeps_existing_device_config() {
+        let mut state = test_state();
+        state
+            .apply_device_batch(
+                &[meta("UPS-REAL", "MDVR-B"), meta("UPS-1.2.3.4", "MDVR-A")],
+                &[],
+            )
+            .unwrap();
+        state
+            .conn
+            .execute(
+                "UPDATE devices SET owner = 'admin', group_name = 'Fleet-A' WHERE sn = 'UPS-REAL'",
+                [],
+            )
+            .unwrap();
+
+        state.migrate_device_sn("UPS-1.2.3.4", "UPS-REAL").unwrap();
+
+        let row: (String, String, i64) = state
+            .conn
+            .query_row(
+                "SELECT owner, group_name, (SELECT count(*) FROM devices)
+                 FROM devices WHERE sn = 'UPS-REAL'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("admin".to_string(), "Fleet-A".to_string(), 1));
     }
 
     /// 存储密度基准（手动运行）：`cargo test --release storage_density -- --ignored --nocapture`

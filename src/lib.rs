@@ -6,4 +6,5 @@ pub mod ota;
 pub mod protocol;
 pub mod settings;
 pub mod storage;
+pub mod version;
 pub mod web;
